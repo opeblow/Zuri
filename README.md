@@ -22,7 +22,7 @@
 
 ---
 
-## ✨ Features
+## Features
 
 - **Voice-first banking** — type or talk; Zuri replies in speech and text.
 - **Multi-language** — English, Pidgin, Yoruba, Igbo, Hausa.
@@ -33,7 +33,7 @@
 - **PIN-secured** — 4-digit PIN hashed with bcrypt; required before any transfer.
 - **Demo mode** — pre-seeded demo account, no real keys required to explore.
 
-## 🧱 Tech stack
+## Tech stack
 
 | Layer      | Choice                                    |
 | ---------- | ----------------------------------------- |
@@ -43,7 +43,7 @@
 | Payments   | Paystack (transfers, account resolve)     |
 | AI         | OpenAI (chat + speech-to-text)            |
 
-## 📁 Project structure
+## Project structure
 
 ```
 zuri/
@@ -80,7 +80,7 @@ zuri/
                                    # PayBillsModal, AirtimeDataModal, ...
 ```
 
-## 🚀 Getting started
+## Getting started
 
 ### Prerequisites
 
@@ -118,7 +118,7 @@ Open **http://localhost:5173** — the Vite dev server proxies `/api` to the bac
 
 All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 
-## 🔑 Environment variables
+## Environment variables
 
 | Variable              | Required | Description                              |
 | --------------------- | -------- | ---------------------------------------- |
@@ -129,7 +129,7 @@ All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 | `PAYSTACK_SECRET_KEY` | no       | Transfers + bank account resolution      |
 | `PAYSTACK_PUBLIC_KEY` | no       | Paystack public key (frontend checkout)  |
 
-## 📡 API overview
+## API overview
 
 | Method | Endpoint                             | Description                      |
 | ------ | ------------------------------------ | -------------------------------- |
@@ -154,7 +154,7 @@ All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 
 Interactive docs: **http://localhost:4000/docs** (Swagger UI).
 
-## 🔒 Security
+## Security
 
 - 4-digit PIN hashed with **bcrypt** — never logged, never sent to the AI model.
 - **JWT** access tokens; dev mode never enabled in production.
@@ -162,14 +162,14 @@ Interactive docs: **http://localhost:4000/docs** (Swagger UI).
 - Money only moves to **saved, bank-verified beneficiaries**.
 - CORS restricted to the frontend origins.
 
-## 🛣️ Roadmap
+## Roadmap
 
 - [ ] Wire Monnify reserved accounts + webhooks (real rails)
 - [ ] Direct-debit mandates on goals
 - [ ] Proactive notifications when salary lands
 - [ ] Automated savings rules (round-ups, % of income)
 
-## 🤝 Contributing
+## Contributing
 
 PRs are welcome. Open an issue first to discuss your idea, then:
 
@@ -177,6 +177,6 @@ PRs are welcome. Open an issue first to discuss your idea, then:
 2. Make your changes and verify backend + frontend boot
 3. Push and open a pull request
 
-## 📝 License
+## License
 
 Released for the **APIConf Hackathon**. See the project brief (`Zuri_Developer_Brief.docx`) for context.
