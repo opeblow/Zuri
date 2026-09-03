@@ -1,3 +1,5 @@
+"""Zuri auth utilities — JWT tokens, bcrypt PIN hashing, passkey verification."""
+
 import os
 import hashlib
 from datetime import datetime, timedelta

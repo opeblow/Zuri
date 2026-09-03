@@ -6,6 +6,7 @@ import Landing from './screens/Landing.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Home from './screens/Home.jsx';
 import Goals from './screens/Goals.jsx';
+import Beneficiaries from './screens/Beneficiaries.jsx';
 import History from './screens/History.jsx';
 import Settings from './screens/Settings.jsx';
 
@@ -53,6 +54,7 @@ export default function App() {
         >
           <Route index element={<Home />} />
           <Route path="goals" element={<Goals />} />
+          <Route path="beneficiaries" element={<Beneficiaries />} />
           <Route path="activity" element={<History />} />
           <Route path="settings" element={<Settings />} />
         </Route>

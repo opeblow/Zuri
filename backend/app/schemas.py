@@ -31,6 +31,8 @@ class AccountResponse(BaseModel):
     full_name: str
     balance_kobo: int
     balance_display: str
+    monnify_reserved_account: Optional[str] = None
+    bank_name: Optional[str] = None
 
 
 # --- Onboarding Schemas ---
@@ -93,6 +95,37 @@ class LogTransactionRequest(BaseModel):
     note: Optional[str] = None
 
 
+# --- Beneficiary / Monnify Schemas ---
+class BeneficiaryCreate(BaseModel):
+    nickname: str
+    full_name: str
+    account_number: str
+    bank_code: str
+
+class BeneficiaryResponse(BaseModel):
+    id: int
+    nickname: str
+    full_name: str
+    account_number: str
+    bank_code: str
+    send_count: int
+
+class BankResolveRequest(BaseModel):
+    account_number: str
+    bank_code: str
+
+class BankResolveResponse(BaseModel):
+    account_number: str
+    account_name: str
+    bank_name: str
+
+class TransferRequest(BaseModel):
+    beneficiary_id: int
+    amount_kobo: int = Field(gt=0)
+    pin: str
+    narration: Optional[str] = None
+
+
 # --- Settings Schemas ---
 class ProfileUpdate(BaseModel):
     language_pref: Optional[str] = None
@@ -114,3 +147,4 @@ class ConversationResponse(BaseModel):
     text: str
     timestamp: str
     audio_base64: Optional[str] = None
+    pending_transfer: Optional[dict] = None

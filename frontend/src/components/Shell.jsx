@@ -7,6 +7,7 @@ import '../styles/dashboard.css';
 const nav = [
   { to: '/dashboard', end: true, label: 'Home', icon: HomeIcon },
   { to: '/dashboard/goals', label: 'Goals', icon: GoalIcon },
+  { to: '/dashboard/beneficiaries', label: 'Beneficiaries', icon: PeopleIcon },
   { to: '/dashboard/activity', label: 'Money Diary', icon: ActivityIcon },
   { to: '/dashboard/settings', label: 'Settings', icon: SettingsIcon },
 ];
@@ -135,6 +136,17 @@ function GoalIcon() {
       <circle cx="12" cy="12" r="10" />
       <circle cx="12" cy="12" r="6" />
       <circle cx="12" cy="12" r="2" />
+    </svg>
+  );
+}
+
+function PeopleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   );
 }

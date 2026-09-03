@@ -49,7 +49,7 @@ def send_text_message(req: ConversationTextRequest, user_id: int = Depends(get_c
     conn.commit()
     conn.close()
 
-    ai_response = run_agent(req.text, user_id, history)
+    ai_response, pending_transfer = run_agent(req.text, user_id, history)
 
     response_time = datetime.utcnow().isoformat()
     conn = get_db()
@@ -66,7 +66,8 @@ def send_text_message(req: ConversationTextRequest, user_id: int = Depends(get_c
     return {
         "user_message": ConversationResponse(role="user", text=req.text, timestamp=now),
         "assistant_message": ConversationResponse(
-            role="assistant", text=ai_response, timestamp=response_time, audio_base64=audio_base64
+            role="assistant", text=ai_response, timestamp=response_time, audio_base64=audio_base64,
+            pending_transfer=pending_transfer,
         ),
     }
 
@@ -96,7 +97,7 @@ async def send_audio_message(file: UploadFile = File(...), user_id: int = Depend
     conn.commit()
     conn.close()
 
-    ai_response = run_agent(transcription, user_id, history)
+    ai_response, pending_transfer = run_agent(transcription, user_id, history)
 
     response_time = datetime.utcnow().isoformat()
     conn = get_db()
@@ -115,6 +116,7 @@ async def send_audio_message(file: UploadFile = File(...), user_id: int = Depend
         "transcription": transcription,
         "user_message": ConversationResponse(role="user", text=transcription, timestamp=now),
         "assistant_message": ConversationResponse(
-            role="assistant", text=ai_response, timestamp=response_time, audio_base64=audio_base64
+            role="assistant", text=ai_response, timestamp=response_time, audio_base64=audio_base64,
+            pending_transfer=pending_transfer,
         ),
     }

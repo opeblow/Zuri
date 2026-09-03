@@ -28,6 +28,11 @@ You can also TAKE ACTION for the user via the provided tools:
 - log_transaction: record something the user earned or spent. This is the core interaction —
   when the user mentions any income or expense in plain language, log it immediately.
 - create_goal: create a savings goal and compute a monthly saving pace.
+- send_money: prepare a real transfer to a saved, Monnify-verified beneficiary (e.g. "send 5k to
+  Mummy"). This never moves money by itself — it only looks up the beneficiary and hands off to a
+  PIN confirmation the user completes in the app. Voice/chat can NEVER send to someone who isn't
+  already a saved beneficiary; if the name isn't recognised, tell the user to add them as a
+  beneficiary first, in the Beneficiaries screen.
 
 Be DECISIVE about actions - this is a working app, not a mock. When the user states an amount
 they earned or spent, call log_transaction right away and confirm what you logged; only ask a
@@ -83,6 +88,21 @@ TOOLS = [
                     },
                 },
                 "required": ["name", "target_amount_naira"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_money",
+            "description": "Look up a saved beneficiary by nickname and prepare a real Monnify transfer, pending PIN confirmation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "beneficiary_nickname": {"type": "string", "description": "e.g. 'Mummy', 'Ada', 'landlord'."},
+                    "amount_naira": {"type": "number", "description": "Amount in Naira."},
+                },
+                "required": ["beneficiary_nickname", "amount_naira"],
             },
         },
     },
@@ -174,6 +194,8 @@ def execute_tool(name: str, args: dict, user_id: int) -> dict:
         return _execute_log_transaction(user_id, args)
     if name == "create_goal":
         return _execute_create_goal(user_id, args)
+    if name == "send_money":
+        return _execute_send_money(user_id, args)
     return {"ok": False, "message": f"Unknown tool {name}.", "reply": "I couldn't do that."}
 
 
@@ -230,9 +252,51 @@ def _execute_create_goal(user_id: int, args: dict):
     }
 
 
-def run_agent(user_message: str, user_id: int, conversation_history: list = None) -> str:
+def _execute_send_money(user_id: int, args: dict):
+    from ..database import get_db
+
+    nickname = str(args.get("beneficiary_nickname", "")).strip().lower()
+    amount_naira = float(args.get("amount_naira") or 0)
+    amount_kobo = int(round(amount_naira * 100))
+    if not nickname or amount_kobo <= 0:
+        return {"ok": False, "reply": "Who should I send to, and how much?"}
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, nickname, full_name FROM beneficiaries WHERE user_id = ? AND LOWER(nickname) LIKE ?",
+        (user_id, f"%{nickname}%"),
+    )
+    beneficiary = cursor.fetchone()
+    conn.close()
+
+    if not beneficiary:
+        return {
+            "ok": False,
+            "reply": f"I don't have '{args.get('beneficiary_nickname')}' saved as a beneficiary yet. "
+                     f"Add them in the Beneficiaries screen first — Zuri only sends to verified, saved people.",
+        }
+
+    return {
+        "ok": True,
+        "reply": (
+            f"Ready to send {_naira(amount_kobo)} to {beneficiary['nickname']} ({beneficiary['full_name']}). "
+            f"Confirm with your PIN in the app to complete it."
+        ),
+        "pending_transfer": {
+            "beneficiary_id": beneficiary["id"],
+            "beneficiary_nickname": beneficiary["nickname"],
+            "beneficiary_full_name": beneficiary["full_name"],
+            "amount_kobo": amount_kobo,
+        },
+    }
+
+
+def run_agent(user_message: str, user_id: int, conversation_history: list = None) -> tuple:
     """Full agentic loop: reply, and if the model requests a tool, execute it against the
-    user's real data and return a natural confirmation."""
+    user's real data and return a natural confirmation. Returns (reply_text, pending_transfer)
+    — pending_transfer is set only when send_money resolved a beneficiary and is awaiting the
+    user's PIN confirmation in the app; it never means money has actually moved."""
     api_client = get_client()
 
     system_prompt = SYSTEM_PROMPT.format(account_context=build_user_context(user_id))
@@ -255,9 +319,10 @@ def run_agent(user_message: str, user_id: int, conversation_history: list = None
         message = response.choices[0].message
 
         if not message.tool_calls:
-            return message.content or "I'm not sure how to respond to that."
+            return message.content or "I'm not sure how to respond to that.", None
 
         tool_feedbacks = []
+        pending_transfer = None
         tool_messages = [{"role": "assistant", "content": message.content or "", "tool_calls": [
             {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
             for tc in message.tool_calls
@@ -271,6 +336,8 @@ def run_agent(user_message: str, user_id: int, conversation_history: list = None
                 args = {}
             result = execute_tool(tc.function.name, args, user_id)
             tool_feedbacks.append(result["reply"])
+            if result.get("pending_transfer"):
+                pending_transfer = result["pending_transfer"]
             tool_messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -285,13 +352,10 @@ def run_agent(user_message: str, user_id: int, conversation_history: list = None
             timeout=25,
         )
         content = final.choices[0].message.content
-        if content and content.strip():
-            return content.strip()
-        if tool_feedbacks:
-            return "\n".join(tool_feedbacks)
-        return "Done."
+        text = content.strip() if content and content.strip() else ("\n".join(tool_feedbacks) if tool_feedbacks else "Done.")
+        return text, pending_transfer
     except Exception as e:
-        return f"I'm having trouble connecting right now. Please try again in a moment. Error: {str(e)}"
+        return f"I'm having trouble connecting right now. Please try again in a moment. Error: {str(e)}", None
 
 
 def transcribe_audio(audio_bytes: bytes, filename: str = "audio.wav") -> str:

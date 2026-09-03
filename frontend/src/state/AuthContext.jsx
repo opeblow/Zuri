@@ -1,3 +1,4 @@
+// Zuri — auth context: JWT session, account refresh, token persistence
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 

@@ -14,6 +14,44 @@ def _naira(kobo: int) -> str:
     return f"₦{(kobo or 0) / 100:,.2f}"
 
 
+def record_monnify_credit(user_id: int, monnify_ref: str, amount_kobo: int, counterparty_name: str = None) -> dict | None:
+    """Post a real inbound Monnify payment. Idempotent on monnify_ref — a
+    replayed webhook for a reference we've already recorded is a no-op.
+    Returns None if the reference was already recorded, else the same shape
+    as log_entry().
+    """
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM transactions WHERE user_id = ? AND monnify_ref = ?",
+            (user_id, monnify_ref),
+        )
+        if cursor.fetchone():
+            return None
+
+        cursor.execute(
+            "UPDATE accounts SET balance_kobo = balance_kobo + ? WHERE user_id = ?",
+            (amount_kobo, user_id),
+        )
+        cursor.execute(
+            """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
+               VALUES (?, ?, 'credit', ?, ?, 'income', 'completed', ?)""",
+            (user_id, monnify_ref, amount_kobo, counterparty_name or "Wallet Top-up", datetime.utcnow().isoformat()),
+        )
+        cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        new_balance = row["balance_kobo"] if row else 0
+        conn.commit()
+        return {
+            "reference": monnify_ref,
+            "new_balance_kobo": new_balance,
+            "new_balance_display": _naira(new_balance),
+        }
+    finally:
+        conn.close()
+
+
 def log_entry(user_id: int, direction: str, amount_kobo: int, category: str, note: str = None) -> dict:
     if direction not in ("credit", "debit"):
         raise ValueError("direction must be 'credit' or 'debit'")

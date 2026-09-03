@@ -84,6 +84,12 @@ export const api = {
   updateProfile: (token, body) =>
     request('/settings/profile', { token, method: 'PATCH', body }),
   resetDemo: (token) => request('/demo/reset', { token, method: 'POST', body: {} }),
+  beneficiaries: (token) => request('/beneficiaries/', { token }),
+  addBeneficiary: (token, body) => request('/beneficiaries/', { token, method: 'POST', body }),
+  deleteBeneficiary: (token, id) => request(`/beneficiaries/${id}`, { token, method: 'DELETE' }),
+  banks: (token) => request('/beneficiaries/banks', { token }),
+  resolveAccount: (token, body) => request('/beneficiaries/resolve', { token, method: 'POST', body }),
+  transfer: (token, body) => request('/actions/transfer', { token, method: 'POST', body }),
 };
 
 export function handleAuthError() {

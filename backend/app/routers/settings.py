@@ -1,3 +1,5 @@
+"""User settings — profile, PIN change, language preference."""
+
 from fastapi import APIRouter, HTTPException, Depends
 
 from ..database import get_db

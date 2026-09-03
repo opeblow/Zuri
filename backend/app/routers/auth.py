@@ -6,6 +6,7 @@ from jose import JWTError
 from ..database import get_db
 from ..schemas import SignupRequest, LoginRequest, VerifyPinRequest, TokenResponse
 from ..services.auth_service import hash_pin, verify_pin, create_access_token, decode_token, decode_token_unverified
+from ..services import monnify
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -44,13 +45,29 @@ def signup(req: SignupRequest):
     )
     user_id = cursor.lastrowid
 
-    # No bank account exists — this is a self-reported ledger. The onboarding
-    # wizard (POST /api/onboarding/setup) sets the real starting balance right
-    # after signup.
     cursor.execute(
         "INSERT INTO accounts (user_id, balance_kobo) VALUES (?, 0)",
         (user_id,),
     )
+
+    # Provision a real Monnify reserved account so the user has somewhere to
+    # actually fund. Degrades silently in demo mode (no Monnify credentials)
+    # or if Monnify is unreachable — the onboarding wizard's starting balance
+    # still lets the app work without it.
+    if not monnify.DEMO_MODE:
+        try:
+            account_reference = f"ZURI-{user_id}-{req.phone}"
+            reserved = monnify.create_reserved_account(
+                account_reference=account_reference,
+                account_name=req.full_name,
+                email=req.email,
+            )
+            cursor.execute(
+                "UPDATE accounts SET monnify_reserved_account = ?, monnify_account_ref = ?, bank_name = ? WHERE user_id = ?",
+                (reserved["account_number"], reserved["account_reference"], reserved["bank_name"], user_id),
+            )
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()

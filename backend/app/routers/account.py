@@ -41,6 +41,8 @@ def get_account(user_id: int = Depends(get_current_user)):
         full_name=user["full_name"],
         balance_kobo=account["balance_kobo"],
         balance_display=format_naira(account["balance_kobo"]),
+        monnify_reserved_account=account["monnify_reserved_account"],
+        bank_name=account["bank_name"],
     )
 
 

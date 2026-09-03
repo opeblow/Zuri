@@ -1,4 +1,6 @@
-﻿import sqlite3
+﻿"""Zuri database layer — SQLite with WAL mode for concurrent reads."""
+
+import sqlite3
 import os
 from pathlib import Path
 

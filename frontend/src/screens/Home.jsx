@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '../state/AuthContext.jsx';
-import { api, formatNaira, speakText } from '../lib/api.js';
+import { api, formatNaira, speakText, handleAuthError } from '../lib/api.js';
+import PinModal from '../components/PinModal.jsx';
 
 function getGreeting() {
   const h = new Date().getHours();
@@ -14,6 +15,7 @@ const LOG_CATEGORIES = ['transport', 'lifestyle', 'bills', 'shopping', 'other'];
 
 export default function Home() {
   const { user, account, token, refreshAccount } = useAuth();
+  const reservedAccount = account?.monnify_reserved_account;
   const name = (user?.full_name || user?.name || '').split(' ')[0] || 'there';
   const balance = account?.balance_kobo ?? 0;
   const [hideBalance, setHideBalance] = useState(false);
@@ -25,6 +27,10 @@ export default function Home() {
   const [logBusy, setLogBusy] = useState(false);
   const [proactiveMessages, setProactiveMessages] = useState([]);
   const [insights, setInsights] = useState(null);
+  const [pendingTransfer, setPendingTransfer] = useState(null);
+  const [pinOpen, setPinOpen] = useState(false);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferResult, setTransferResult] = useState(null);
   const feedRef = useRef(null);
 
   const [recording, setRecording] = useState(false);
@@ -117,6 +123,7 @@ export default function Home() {
       const data = await api.talk(token, text, true);
       pushMessage('assistant', data.assistant_message.text);
       playReply(data.assistant_message);
+      if (data.assistant_message.pending_transfer) setPendingTransfer(data.assistant_message.pending_transfer);
       loadInsights();
     } catch (err) {
       pushMessage('assistant', err.message || 'I could not answer that right now.');
@@ -319,7 +326,13 @@ export default function Home() {
                 </button>
               </span>
               <span className="balance-amount">{hideBalance ? '••••••' : formatNaira(balance)}</span>
-              <span className="balance-sub">Your money diary — logged, not synced from a bank</span>
+              {reservedAccount ? (
+                <span className="balance-sub">
+                  Fund your Zuri account: <strong>{reservedAccount}</strong> · {account?.bank_name || 'Wema Bank'} (Monnify)
+                </span>
+              ) : (
+                <span className="balance-sub">Your money diary — logged entries plus anything real that lands via Monnify</span>
+              )}
               <button
                 className="btn btn-primary balance-topup"
                 type="button"

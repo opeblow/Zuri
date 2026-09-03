@@ -1,3 +1,4 @@
+// Zuri — PIN confirmation modal for transfers and settings
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { AuthError } from '../lib/api.js';
 
