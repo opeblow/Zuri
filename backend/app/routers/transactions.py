@@ -4,9 +4,10 @@ from typing import Optional
 from datetime import datetime, timedelta
 
 from ..database import get_db
-from ..schemas import TransactionResponse, TransactionUpdate, TransferRequest
+from ..schemas import TransactionResponse, TransactionUpdate, TransferRequest, TransferAuthorizeRequest
 from .auth import get_current_user
 from ..services.auth_service import verify_pin
+from ..services import monnify
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
 
@@ -60,6 +61,30 @@ def update_transaction(transaction_id: int, req: TransactionUpdate, user_id: int
     return {"message": "Transaction updated"}
 
 
+def _resolve_destination_name(cursor, req, user_id) -> str:
+    """Return the verified beneficiary name for Monnify (destinationAccountName).
+
+    Prefers a saved beneficiary's verified full name; otherwise resolves the
+    account via Monnify when bank details are supplied (live mode).
+    """
+    if req.account_number and req.bank_code:
+        cursor.execute(
+            "SELECT full_name FROM beneficiaries WHERE user_id = ? AND account_number = ? AND bank_code = ?",
+            (user_id, req.account_number, req.bank_code),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["full_name"]
+        if not monnify.DEMO_MODE and req.counterparty_name:
+            try:
+                verified = monnify.verify_account(req.account_number, req.bank_code)
+                if verified and verified.get("account_name"):
+                    return verified["account_name"]
+            except Exception:
+                pass
+    return req.counterparty_name
+
+
 @router.post("/transfer")
 def create_transfer(
     req: TransferRequest,
@@ -97,58 +122,141 @@ def create_transfer(
             raise HTTPException(status_code=400, detail="Incorrect PIN")
 
         cursor.execute(
-            "UPDATE accounts SET balance_kobo = balance_kobo - ? "
-            "WHERE user_id = ? AND balance_kobo >= ?",
-            (req.amount_kobo, user_id, req.amount_kobo),
+            "SELECT balance_kobo FROM accounts WHERE user_id = ?",
+            (user_id,),
         )
-        if cursor.rowcount != 1:
-            cursor.execute("SELECT 1 FROM accounts WHERE user_id = ?", (user_id,))
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Account not found")
-            raise HTTPException(status_code=400, detail="Insufficient balance")
-
-        cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
         account = cursor.fetchone()
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
+        if account["balance_kobo"] < req.amount_kobo:
+            raise HTTPException(status_code=400, detail="Insufficient balance")
 
-        monnify_ref = f"MON-{req.category[:2].upper()}-{int(datetime.utcnow().timestamp())}"
-        cursor.execute(
-            """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
-               VALUES (?, ?, 'debit', ?, ?, ?, 'completed', ?)""",
-            (user_id, monnify_ref, req.amount_kobo, req.counterparty_name, req.category, datetime.utcnow().isoformat()),
-        )
+        reference = f"MON-{req.category[:2].upper()}-{int(datetime.utcnow().timestamp() * 1000)}"
 
-        if req.account_number and req.bank_code:
+        # --- Demo mode: keep the existing local simulation ---
+        if monnify.DEMO_MODE:
             cursor.execute(
-                "SELECT id FROM beneficiaries WHERE user_id = ? AND account_number = ? AND bank_code = ?",
-                (user_id, req.account_number, req.bank_code),
+                "UPDATE accounts SET balance_kobo = balance_kobo - ? WHERE user_id = ?",
+                (req.amount_kobo, user_id),
             )
-            existing = cursor.fetchone()
-            if existing:
-                cursor.execute(
-                    "UPDATE beneficiaries SET send_count = send_count + 1 WHERE id = ?",
-                    (existing["id"],),
-                )
-            else:
-                cursor.execute(
-                    "INSERT INTO beneficiaries (user_id, full_name, account_number, bank_code) VALUES (?, ?, ?, ?)",
-                    (user_id, req.counterparty_name, req.account_number, req.bank_code),
-                )
+            cursor.execute(
+                """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
+                   VALUES (?, ?, 'debit', ?, ?, ?, 'completed', ?)""",
+                (user_id, reference, req.amount_kobo, req.counterparty_name, req.category, datetime.utcnow().isoformat()),
+            )
+            cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
+            new_balance = cursor.fetchone()["balance_kobo"]
+            response = {
+                "message": "Transfer successful",
+                "status": "completed",
+                "reference": reference,
+                "new_balance_kobo": new_balance,
+                "new_balance_display": f"\u20a6{new_balance / 100:,.2f}",
+            }
+            cursor.execute(
+                "INSERT INTO idempotency_keys (user_id, key, response_json, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, idempotency_key, json.dumps(response), datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return response
 
-        cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
-        new_balance = cursor.fetchone()["balance_kobo"]
+        # --- Live mode: real Monnify transfer ---
+        destination_name = req.counterparty_name
+        if req.account_number and req.bank_code:
+            destination_name = _resolve_destination_name(cursor, req, user_id)
 
-        response = {
-            "message": "Transfer successful",
-            "new_balance_kobo": new_balance,
-            "new_balance_display": f"\u20a6{new_balance / 100:,.2f}",
-        }
-        cursor.execute(
-            "INSERT INTO idempotency_keys (user_id, key, response_json, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, idempotency_key, json.dumps(response), datetime.utcnow().isoformat()),
+        result = monnify.transfer(
+            amount_kobo=req.amount_kobo,
+            account_number=req.account_number,
+            bank_code=req.bank_code,
+            reference=reference,
+            account_name=destination_name,
+            narration=f"Zuri {req.category} to {destination_name}",
         )
-        conn.commit()
-        return response
+
+        if result.get("status") == "PENDING_AUTHORIZATION":
+            cursor.execute(
+                """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
+                   VALUES (?, ?, 'debit', ?, ?, ?, 'pending', ?)""",
+                (user_id, reference, req.amount_kobo, destination_name, req.category, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return {
+                "message": "Transfer requires OTP authorization",
+                "status": "pending_authorization",
+                "reference": reference,
+                "amount_kobo": req.amount_kobo,
+            }
+
+        if result.get("status") in ("SUCCESS", "COMPLETED"):
+            cursor.execute(
+                "UPDATE accounts SET balance_kobo = balance_kobo - ? WHERE user_id = ?",
+                (req.amount_kobo, user_id),
+            )
+            cursor.execute(
+                """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
+                   VALUES (?, ?, 'debit', ?, ?, ?, 'completed', ?)""",
+                (user_id, reference, req.amount_kobo, destination_name, req.category, datetime.utcnow().isoformat()),
+            )
+            cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
+            new_balance = cursor.fetchone()["balance_kobo"]
+            response = {
+                "message": "Transfer successful",
+                "status": "completed",
+                "reference": reference,
+                "new_balance_kobo": new_balance,
+                "new_balance_display": f"\u20a6{new_balance / 100:,.2f}",
+            }
+            cursor.execute(
+                "INSERT INTO idempotency_keys (user_id, key, response_json, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, idempotency_key, json.dumps(response), datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+            return response
+
+        raise HTTPException(status_code=502, detail=f"Transfer failed: {result.get('status', 'unknown')}")
+    finally:
+        conn.close()
+
+
+@router.post("/transfer/authorize")
+def authorize_transfer(req: TransferAuthorizeRequest, user_id: int = Depends(get_current_user)):
+    """Authorize a transfer awaiting OTP (MFA). Submits the OTP sent to the Monnify email."""
+    conn = get_db()
+    try:
+        result = monnify.authorize_transfer(req.reference, req.otp)
+
+        if result.get("status") in ("SUCCESS", "COMPLETED"):
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT amount_kobo FROM transactions WHERE user_id = ? AND monnify_ref = ? AND status = 'pending'",
+                (user_id, req.reference),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    "UPDATE transactions SET status = 'completed' WHERE user_id = ? AND monnify_ref = ?",
+                    (user_id, req.reference),
+                )
+                cursor.execute(
+                    "UPDATE accounts SET balance_kobo = balance_kobo - ? WHERE user_id = ?",
+                    (row["amount_kobo"], user_id),
+                )
+            cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
+            new_balance = cursor.fetchone()["balance_kobo"]
+            conn.commit()
+            return {
+                "message": "Transfer authorized and completed",
+                "status": "completed",
+                "reference": req.reference,
+                "new_balance_kobo": new_balance,
+                "new_balance_display": f"\u20a6{new_balance / 100:,.2f}",
+            }
+
+        return {
+            "message": "Transfer authorization submitted",
+            "status": result.get("status", "pending"),
+            "reference": req.reference,
+        }
     finally:
         conn.close()

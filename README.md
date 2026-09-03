@@ -31,7 +31,8 @@
 - **Beneficiaries** — nickname + verified account; transfers only go to saved people.
 - **Smart history** — every transaction categorised (income, transfers, bills, lifestyle, shopping).
 - **PIN-secured** — 4-digit PIN hashed with bcrypt; required before any transfer.
-- **Demo mode** — pre-seeded demo account, no real keys required to explore.
+- **Demo money** — no pre-seeded data; you sign up fresh, and every new account gets a
+  welcome bonus (or a "Top up" button) so transfers can be demoed instantly.
 
 ## Tech stack
 
@@ -40,7 +41,7 @@
 | Frontend   | React 19, Vite 6, React Router 7          |
 | Backend    | Python 3.12, FastAPI, SQLite, Uvicorn     |
 | Auth       | JWT (python-jose), bcrypt / passlib       |
-| Payments   | Paystack (transfers, account resolve)     |
+| Payments   | Monnify (reserved accounts, transfers, direct-debit mandates, webhooks) |
 | AI         | OpenAI (chat + speech-to-text)            |
 
 ## Project structure
@@ -53,8 +54,8 @@ zuri/
 │   ├── .env.example               # environment template
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py                # app assembly, CORS, DB init + seed on boot
-│       ├── database.py            # SQLite schema + demo seed (Amina)
+│       ├── main.py                # app assembly, CORS, DB init on boot
+│       ├── database.py            # SQLite schema + migrations
 │       ├── schemas.py             # Pydantic request/response models
 │       ├── routers/
 │       │   ├── auth.py            # signup, login, verify-pin, JWT guard
@@ -98,8 +99,8 @@ copy .env.example .env    # Windows · macOS/Linux: cp .env.example .env
 uvicorn app.main:app --reload --port 4000
 ```
 
-The SQLite DB (`backend/zuri.db`) is created and seeded automatically on first
-boot — no migration step needed.
+The SQLite DB (`backend/zuri.db`) is created automatically on first boot (tables +
+migrations only — no seed data) — no migration step needed.
 
 ### 2. Frontend
 
@@ -110,11 +111,6 @@ npm run dev
 ```
 
 Open **http://localhost:5173** — the Vite dev server proxies `/api` to the backend.
-
-### Demo account
-
-> **Phone:** `08012345678` · **PIN:** `1234`
-> — or tap **Enter demo** on the Welcome screen.
 
 All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 
@@ -128,6 +124,60 @@ All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 | `OPENAI_API_KEY`      | no       | Chat + speech-to-text (blank = fallback) |
 | `PAYSTACK_SECRET_KEY` | no       | Transfers + bank account resolution      |
 | `PAYSTACK_PUBLIC_KEY` | no       | Paystack public key (frontend checkout)  |
+| `MONNIFY_API_KEY`     | no*      | Monnify API key (sandbox/live)           |
+| `MONNIFY_SECRET_KEY`  | no*      | Monnify secret key (sandbox/live)        |
+| `MONNIFY_CONTRACT_CODE` | no*    | Monnify contract code for reserved accounts & mandates |
+| `MONNIFY_BASE_URL`    | no*      | `https://sandbox.monnify.com` by default |
+| `MONNIFY_WALLET_ACCOUNT_NUMBER` | no* | Disbursement wallet account (Dashboard > Disbursement) |
+
+\* Without `MONNIFY_*` keys the app runs in **demo mode** (simulated money
+movement) — perfect for a no-keys bootstrap. Provide real values to use the
+Monnify rails.
+
+## Monnify integration & webhooks
+
+Zuri already wires the real Monnify Sandbox APIs:
+
+- **Reserved account on signup** — every new user gets a virtual account number.
+- **Name Inquiry** — beneficiary accounts verified via Monnify before transfer.
+- **Transfers** — idempotent, PIN-gated, OTP-authorised (MFA is on by default).
+- **Direct-debit mandates** — set up recurring savings on a goal, then auto-save.
+- **Webhooks** — incoming reserved-account payments auto-credit a user's wallet.
+
+### Webhook URL (Monnify dashboard)
+
+Set the **transaction completion / account** webhook URL in your Monnify
+Dashboard (Developers → Webhook URLs) to:
+
+```
+https://<your-public-host>/api/webhooks/monnify
+```
+
+It is verified with HMAC-SHA512 via the `monnify-signature` header. **Note:**
+sandbox webhooks omit the signature header and Monnify's production webhook IP
+is `35.242.133.146` — whitelist it in production.
+
+### Receiving webhooks locally (tunnel)
+
+Monnify can't reach `localhost`, so expose the backend with a tunnel:
+
+```bash
+ngrok http 4000
+# → https://<random>.ngrok.io/api/webhooks/monnify  (use this as the webhook URL)
+```
+
+Keep `uvicorn app.main:app --port 4000` running; the tunnel forwards Monnify's
+POST to your machine.
+
+### Testing money-in (sandbox)
+
+Real banks/apps (e.g. Opay) **cannot** fund Monnify sandbox virtual accounts —
+that's expected (they're gateway-provisioned). Use the
+[Monnify payment simulator](https://websim.sdk.monnify.com/?#/bankingapp) to
+deposit into a reserved account, which triggers the webhook and credits the
+user's wallet. Alternatively use `POST /api/demo/salary-landed` for a local
+credit during a walkthrough.
+
 
 ## API overview
 
@@ -139,13 +189,17 @@ All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 | GET    | `/api/account`                       | Balance + reserved account        |
 | GET    | `/api/transactions`                  | Categorised transaction history   |
 | POST   | `/api/transactions/transfer`         | Idempotent, PIN-gated transfer    |
+| POST   | `/api/transactions/transfer/authorize` | Complete a transfer with the Monnify OTP |
 | GET    | `/api/beneficiaries`                 | Saved beneficiaries               |
-| POST   | `/api/beneficiaries/resolve`         | Verify account number (Paystack)  |
+| POST   | `/api/beneficiaries/resolve`         | Verify account number (Monnify Name Inquiry) |
 | GET    | `/api/beneficiaries/banks`           | List Nigerian banks               |
 | GET    | `/api/goals`                         | Savings goals                     |
 | POST   | `/api/actions/goal`                  | Create a goal                     |
 | POST   | `/api/actions/goals/{id}/deposit`    | Deposit into a goal               |
 | POST   | `/api/actions/goals/{id}/withdraw`   | Withdraw from a goal              |
+| POST   | `/api/actions/goals/{id}/mandate`    | Set up a direct-debit auto-save mandate |
+| POST   | `/api/actions/goals/{id}/auto-save`  | Trigger a recurring auto-save debit |
+| POST   | `/api/webhooks/monnify`              | Monnify webhook (top-ups credit wallet) |
 | POST   | `/api/conversation/text`             | Chat with Zuri (text)             |
 | POST   | `/api/conversation/audio`            | Chat with Zuri (voice)            |
 | PATCH  | `/api/settings/profile`              | Update language / biometric prefs |
@@ -164,10 +218,11 @@ Interactive docs: **http://localhost:4000/docs** (Swagger UI).
 
 ## Roadmap
 
-- [ ] Wire Monnify reserved accounts + webhooks (real rails)
-- [ ] Direct-debit mandates on goals
+- [x] Wire Monnify reserved accounts + webhooks (real rails)
+- [x] Direct-debit mandates on goals
 - [ ] Proactive notifications when salary lands
 - [ ] Automated savings rules (round-ups, % of income)
+- [ ] Bills payment (airtime/data/electricity/cable — needs Monnify Bills activation)
 
 ## Contributing
 

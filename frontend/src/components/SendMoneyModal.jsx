@@ -22,18 +22,50 @@ export default function SendMoneyModal({ onClose }) {
   const bankDropdownRef = useRef(null);
   const searchInputRef = useRef(null);
 
+  const DEFAULT_BANKS = [
+    { code: '057', name: 'Wema Bank' },
+    { code: '011', name: 'First Bank of Nigeria' },
+    { code: '058', name: 'Guaranty Trust Bank' },
+    { code: '044', name: 'Access Bank' },
+    { code: '033', name: 'United Bank for Africa' },
+    { code: '232', name: 'Sterling Bank' },
+    { code: '035', name: 'Moniepoint Microfinance Bank' },
+    { code: '50211', name: 'Kuda Microfinance Bank' },
+    { code: '999991', name: 'OPay Digital Services Limited' },
+    { code: '999992', name: 'PalmPay Limited' },
+    { code: '054', name: 'Zenith Bank' },
+    { code: '214', name: 'First City Monument Bank' },
+    { code: '070', name: 'Fidelity Bank' },
+    { code: '050', name: 'Ecobank Nigeria' },
+    { code: '221', name: 'Stanbic IBTC Bank' },
+    { code: '030', name: 'Heritage Bank' },
+    { code: '032', name: 'Union Bank of Nigeria' },
+    { code: '076', name: 'Polaris Bank' },
+    { code: '101', name: 'Providus Bank' },
+    { code: '215', name: 'Unity Bank' },
+    { code: '301', name: 'Jaiz Bank' },
+    { code: '001', name: 'Globus Bank' },
+    { code: '082', name: 'Keystone Bank' },
+    { code: '100', name: 'SunTrust Bank' },
+  ];
+
   useEffect(() => {
     (token ? api.fetchBanks() : api.banks()).then((d) => {
-      setBanks(d.banks || []);
-    }).catch(() => {});
+      const list = d.banks || [];
+      setBanks(list.length ? list : DEFAULT_BANKS);
+    }).catch(() => {
+      setBanks(DEFAULT_BANKS);
+    });
   }, [token]);
 
   const TOP_BANKS = useMemo(() => {
-    const popular = ['OPay', 'Kuda', 'Moniepoint', 'GTBank', 'Access Bank', 'Zenith Bank', 'First Bank', 'United Bank for Africa'];
+    const popular = ['Wema', 'Zenith', 'Access', 'First Bank', 'Guaranty Trust', 'United Bank', 'Sterling', 'Kuda', 'OPay'];
     const found = popular
       .map((name) => banks.find((b) => b.name.toLowerCase().includes(name.toLowerCase())))
-      .filter(Boolean);
-    return found;
+      .filter(Boolean)
+      .filter((b, i, arr) => arr.findIndex((x) => x.code === b.code) === i);
+    if (found.length) return found;
+    return banks.slice(0, 6);
   }, [banks]);
 
   const showBankSection = form.account_number.length === 10;

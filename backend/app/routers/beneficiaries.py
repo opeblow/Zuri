@@ -8,43 +8,12 @@ from fastapi import APIRouter, HTTPException, Depends
 from ..database import get_db
 from ..schemas import BeneficiaryCreate, BeneficiaryResponse, BankResolveRequest, BankResolveResponse
 from .auth import get_current_user
+from ..services import monnify
+from ..banks import get_all_banks
 
 router = APIRouter(prefix="/api/beneficiaries", tags=["beneficiaries"])
 
 PAYSTACK_SECRET_KEY = os.environ.get("PAYSTACK_SECRET_KEY", "")
-
-BANK_CACHE = {"data": None, "ts": 0}
-
-FALLBACK_BANKS = [
-    {"code": "044", "name": "Access Bank"},
-    {"code": "063", "name": "Diamond Bank"},
-    {"code": "050", "name": "Ecobank Nigeria"},
-    {"code": "045", "name": "Equitorial Trust Bank"},
-    {"code": "011", "name": "First Bank of Nigeria"},
-    {"code": "214", "name": "First City Monument Bank"},
-    {"code": "070", "name": "Fidelity Bank"},
-    {"code": "058", "name": "Guaranty Trust Bank"},
-    {"code": "030", "name": "Heritage Bank"},
-    {"code": "016", "name": "Standard Chartered Bank"},
-    {"code": "032", "name": "Sterling Bank"},
-    {"code": "033", "name": "United Bank for Africa"},
-    {"code": "035", "name": "Union Bank of Nigeria"},
-    {"code": "076", "name": "Polaris Bank"},
-    {"code": "057", "name": "Wema Bank"},
-    {"code": "054", "name": "Zenith Bank"},
-    {"code": "090", "name": "Globus Bank"},
-    {"code": "091", "name": "Palmpay"},
-    {"code": "100", "name": "SunTrust Bank"},
-    {"code": "101", "name": "Providus Bank"},
-    {"code": "082", "name": "Keystone Bank"},
-    {"code": "301", "name": "Jaiz Bank"},
-    {"code": "999", "name": "Moniepoint MFB"},
-    {"code": "073", "name": "Opay"},
-    {"code": "091", "name": "Kuda Bank"},
-    {"code": "0901", "name": "VBank"},
-    {"code": "50211", "name": "Palmpay"},
-    {"code": "100004", "name": "OPay (Paycom)"},
-]
 
 
 def _fetch_banks_from_paystack():
@@ -132,22 +101,29 @@ def delete_beneficiary(beneficiary_id: int, user_id: int = Depends(get_current_u
 
 @router.get("/banks")
 def list_banks():
-    now = time.time()
-    if BANK_CACHE["data"] and now - BANK_CACHE["ts"] < 3600:
-        return {"banks": BANK_CACHE["data"]}
-
-    live = _fetch_banks_from_paystack()
-    if live:
-        BANK_CACHE["data"] = live
-        BANK_CACHE["ts"] = now
-        return {"banks": live}
-
-    return {"banks": FALLBACK_BANKS}
+    return {"banks": get_all_banks()}
 
 
 @router.post("/resolve")
 def resolve_account(req: BankResolveRequest):
-    # 1) Try live Paystack resolution
+    # 1) Live Monnify Name Inquiry (the hackathon payment rail)
+    if not monnify.DEMO_MODE:
+        try:
+            verified = monnify.verify_account(req.account_number, req.bank_code)
+            bank_name = "Unknown Bank"
+            for b in FALLBACK_BANKS:
+                if b["code"] == req.bank_code:
+                    bank_name = b["name"]
+                    break
+            return BankResolveResponse(
+                account_number=req.account_number,
+                account_name=verified["account_name"],
+                bank_name=bank_name,
+            )
+        except Exception:
+            pass  # fall through to Paystack / dev fallback
+
+    # 2) Try live Paystack resolution
     live_name = _resolve_via_paystack(req.account_number, req.bank_code)
     if live_name:
         bank_name = "Unknown Bank"
@@ -161,7 +137,7 @@ def resolve_account(req: BankResolveRequest):
             bank_name=bank_name,
         )
 
-    # 2) Dev fallback – never break local development
+    # 3) Dev fallback – never break local development
     dev_name = f"Account Holder {req.account_number[-4:]}"
     bank_name = "Unknown Bank"
     for b in FALLBACK_BANKS:

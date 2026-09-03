@@ -54,10 +54,10 @@ export const api = {
   signup: (payload) => request('/auth/signup', { method: 'POST', body: payload }),
   verifyPin: (token, pin) => request('/auth/verify-pin', { token, method: 'POST', body: { pin } }),
   account: (token) => request('/account', { token }),
-  transactions: (token) => request('/transactions', { token }),
+  transactions: (token) => request('/transactions/', { token }),
   goals: (token) => request('/goals', { token }),
-  beneficiaries: (token) => request('/beneficiaries', { token }),
-  addBeneficiary: (token, body) => request('/beneficiaries', { token, method: 'POST', body }),
+  beneficiaries: (token) => request('/beneficiaries/', { token }),
+  addBeneficiary: (token, body) => request('/beneficiaries/', { token, method: 'POST', body }),
   deleteBeneficiary: (token, id) => request(`/beneficiaries/${id}`, { token, method: 'DELETE' }),
   resolveBeneficiary: (token, body) => request('/beneficiaries/resolve', { token, method: 'POST', body }),
   banks: () => request('/beneficiaries/banks'),
@@ -79,7 +79,6 @@ export const api = {
     request(`/actions/goals/${id}/withdraw`, { token, method: 'POST', body }),
   verifyAccount: (token, body) => request('/actions/verify-account', { token, method: 'POST', body }),
   salaryDemo: (token) => request('/demo/salary-landed', { token, method: 'POST', body: {} }),
-  resetDemo: () => request('/demo/reset', { method: 'POST', body: {} }),
   patchGoal: (token, id, body) =>
     request(`/actions/goals/${id}`, { token, method: 'PATCH', body }),
   updateProfile: (token, body) =>

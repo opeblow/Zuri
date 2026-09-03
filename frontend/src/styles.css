@@ -346,6 +346,32 @@ a {
   box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.2);
 }
 
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 44px;
+}
+
+.password-eye {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  padding: 4px;
+}
+
+.password-eye:hover {
+  color: var(--ink);
+}
+
 .panel {
   padding: 28px 22px;
   position: relative;

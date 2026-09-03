@@ -1,15 +1,9 @@
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../state/AuthContext.jsx';
-import { api } from '../lib/api.js';
 
 export default function Welcome() {
-  const { token, login } = useAuth();
+  const { token } = useAuth();
   if (token) return <Navigate to="/dashboard" replace />;
-
-  async function demoLogin() {
-    await api.resetDemo();
-    await login('08012345678', '1234');
-  }
 
   return (
     <section className="hero-screen">
@@ -21,9 +15,6 @@ export default function Welcome() {
         <Link className="btn btn-primary" to="/onboarding" style={{ textAlign: 'center' }}>
           Open an account
         </Link>
-        <button type="button" className="btn btn-ghost" onClick={demoLogin}>
-          Enter demo
-        </button>
       </div>
     </section>
   );

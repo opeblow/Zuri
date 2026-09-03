@@ -31,7 +31,7 @@ export default function Settings() {
   const name = user?.full_name || 'Account';
   const phone = user?.phone || '';
   const initial = name.charAt(0).toUpperCase();
-  const accountNumber = account?.reserved_account || '—';
+  const accountNumber = account?.account_number || account?.reserved_account || '—';
   const bankName = 'Zuri';
 
   return (

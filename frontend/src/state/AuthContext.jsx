@@ -71,8 +71,8 @@ export function AuthProvider({ children }) {
   async function login(phone, pin) {
     const data = await api.login(phone, pin);
     const tok = data.access_token || data.token;
-    persist(tok, data.user);
     const acc = await api.account(tok);
+    persist(tok, { full_name: acc.full_name });
     setAccount(acc);
     return data;
   }

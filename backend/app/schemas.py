@@ -78,6 +78,15 @@ class GoalUpdate(BaseModel):
 class GoalDepositRequest(BaseModel):
     amount_kobo: int
 
+class GoalMandateCreateRequest(BaseModel):
+    account_number: str
+    bank_code: str
+    address: Optional[str] = "Zuri, Nigeria"
+    recurring_amount_kobo: Optional[int] = None
+
+class GoalAutoSaveRequest(BaseModel):
+    amount_kobo: int
+
 class GoalResponse(BaseModel):
     id: int
     name: str
@@ -109,6 +118,10 @@ class TransferRequest(BaseModel):
     account_number: Optional[str] = None
     bank_code: Optional[str] = None
     pin: str
+
+class TransferAuthorizeRequest(BaseModel):
+    reference: str
+    otp: str
 
 
 # --- Settings Schemas ---

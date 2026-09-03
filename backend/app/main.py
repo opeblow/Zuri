@@ -1,18 +1,19 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from .database import init_db, seed_demo_data
-from .routers import auth, account, goals, beneficiaries, transactions, settings, conversation
+from .database import init_db
+from .routers import auth, account, goals, beneficiaries, transactions, settings, conversation, webhooks
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    seed_demo_data()
     yield
 
 
@@ -28,6 +29,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:3000",
+        *[o for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o],
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -41,6 +43,7 @@ app.include_router(beneficiaries.router)
 app.include_router(transactions.router)
 app.include_router(settings.router)
 app.include_router(conversation.router)
+app.include_router(webhooks.router)
 
 
 @app.get("/")

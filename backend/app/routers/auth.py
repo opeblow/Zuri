@@ -1,4 +1,6 @@
 import os
+import uuid
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Header
 from typing import Optional
 from jose import JWTError
@@ -6,6 +8,7 @@ from jose import JWTError
 from ..database import get_db
 from ..schemas import SignupRequest, LoginRequest, VerifyPinRequest, TokenResponse
 from ..services.auth_service import hash_pin, verify_pin, create_access_token, decode_token, decode_token_unverified
+from ..services import monnify
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -26,6 +29,31 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> int:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
+def _provision_reserved_account(user_id: int, email: str, full_name: str) -> dict:
+    """Provision a real Monnify reserved account. Falls back to a placeholder
+    reference when Monnify is not configured (demo mode) or on failure."""
+    if monnify.DEMO_MODE:
+        return {
+            "account_number": f"ACCT{user_id:06d}",
+            "account_reference": None,
+            "bank_name": "Wema Bank",
+        }
+    account_reference = f"ZUR-{user_id}-{uuid.uuid4().hex[:14]}"
+    try:
+        return monnify.create_reserved_account(
+            account_reference=account_reference,
+            account_name=full_name,
+            email=email,
+        )
+    except Exception:
+        # Never break signup because Monnify provisioning failed.
+        return {
+            "account_number": f"ACCT{user_id:06d}",
+            "account_reference": account_reference,
+            "bank_name": "Wema Bank",
+        }
+
+
 @router.post("/signup", response_model=TokenResponse)
 def signup(req: SignupRequest):
     conn = get_db()
@@ -44,10 +72,19 @@ def signup(req: SignupRequest):
     )
     user_id = cursor.lastrowid
 
+    reserved = _provision_reserved_account(user_id, req.email or "", req.full_name)
+    welcome_bonus = int(os.getenv("WELCOME_BONUS_KOBO", "20000000"))
     cursor.execute(
-        "INSERT INTO accounts (user_id, monnify_reserved_account, bank_name, balance_kobo) VALUES (?, ?, ?, ?)",
-        (user_id, f"ACCT{user_id:06d}", "Wema Bank", 0),
+        "INSERT INTO accounts (user_id, monnify_reserved_account, monnify_account_ref, bank_name, balance_kobo) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (user_id, reserved["account_number"], reserved["account_reference"], reserved["bank_name"], welcome_bonus),
     )
+    if welcome_bonus > 0:
+        cursor.execute(
+            """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
+               VALUES (?, ?, 'credit', ?, ?, 'income', 'completed', ?)""",
+            (user_id, f"MON-WELCOME-{user_id}", welcome_bonus, "Welcome bonus", datetime.utcnow().isoformat()),
+        )
 
     conn.commit()
     conn.close()

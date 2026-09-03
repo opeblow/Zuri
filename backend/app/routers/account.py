@@ -13,73 +13,15 @@ from ..database import get_db
 from ..schemas import AccountResponse
 from .auth import get_current_user
 from ..services.auth_service import decode_token
-from ..database import seed_demo_data
-
+from ..banks import get_all_banks
 router = APIRouter(prefix="/api", tags=["account"])
 
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
 
-BANK_CACHE = {"data": None, "ts": 0}
-
-FALLBACK_BANKS = [
-    {"code": "044", "name": "Access Bank"},
-    {"code": "063", "name": "Diamond Bank"},
-    {"code": "050", "name": "Ecobank Nigeria"},
-    {"code": "011", "name": "First Bank of Nigeria"},
-    {"code": "214", "name": "First City Monument Bank"},
-    {"code": "070", "name": "Fidelity Bank"},
-    {"code": "058", "name": "Guaranty Trust Bank"},
-    {"code": "030", "name": "Heritage Bank"},
-    {"code": "016", "name": "Standard Chartered Bank"},
-    {"code": "032", "name": "Sterling Bank"},
-    {"code": "033", "name": "United Bank for Africa"},
-    {"code": "035", "name": "Union Bank of Nigeria"},
-    {"code": "076", "name": "Polaris Bank"},
-    {"code": "057", "name": "Wema Bank"},
-    {"code": "054", "name": "Zenith Bank"},
-    {"code": "090", "name": "Globus Bank"},
-    {"code": "100", "name": "SunTrust Bank"},
-    {"code": "091", "name": "Payment Protection"},
-    {"code": "101", "name": "Providus Bank"},
-    {"code": "070", "name": "Fidelity Bank"},
-    {"code": "232", "name": "Sterling Bank"},
-    {"code": "039", "name": "Platinum Habib Bank"},
-    {"code": "082", "name": "Keystone Bank"},
-    {"code": "035", "name": "Wema Bank"},
-    {"code": "068", "name": "Standard Chartered Bank"},
-    {"code": "301", "name": "Jaiz Bank"},
-    {"code": "089", "name": "TrustBank"},
-    {"code": "999", "name": "Moniepoint MFB"},
-    {"code": "100", "name": "GlobePay"},
-    {"code": "073", "name": "Orgaan Grown MFB"},
-]
-
-
-def _fetch_banks_from_paystack():
-    try:
-        headers = {"Accept": "application/json"}
-        if PAYSTACK_SECRET_KEY:
-            headers["Authorization"] = f"Bearer {PAYSTACK_SECRET_KEY}"
-        req = urllib.request.Request(
-            "https://api.paystack.co/bank?country=nigeria&per_page=200",
-            headers=headers,
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            body = json.loads(resp.read().decode())
-            if body.get("status") and body.get("data"):
-                return [
-                    {"code": b.get("code", ""), "name": b.get("name", "")}
-                    for b in body["data"]
-                    if b.get("active")
-                ]
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError, OSError):
-        pass
-    return None
-
 
 def format_naira(kobo: int) -> str:
     naira = kobo / 100
-    return f"₦{naira:,.2f}"
+    return f"â‚¦{naira:,.2f}"
 
 
 @router.get("/account", response_model=AccountResponse)
@@ -127,6 +69,7 @@ def salary_landed(user_id: int = Depends(get_current_user)):
 
     cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
     account = cursor.fetchone()
+    conn.commit()
     conn.close()
 
     return {
@@ -153,25 +96,12 @@ def reset_demo(user_id: int = Depends(get_current_user)):
     conn.commit()
     conn.close()
 
-    seed_demo_data()
-
     return {"message": "Demo data reset successfully"}
 
 
 @router.get("/banks")
 def list_all_banks():
-    import time
-    now = time.time()
-    if BANK_CACHE["data"] and now - BANK_CACHE["ts"] < 3600:
-        return {"banks": BANK_CACHE["data"]}
-
-    live = _fetch_banks_from_paystack()
-    if live:
-        BANK_CACHE["data"] = live
-        BANK_CACHE["ts"] = now
-        return {"banks": live}
-
-    return {"banks": FALLBACK_BANKS}
+    return {"banks": get_all_banks()}
 
 
 @router.get("/events/stream")
