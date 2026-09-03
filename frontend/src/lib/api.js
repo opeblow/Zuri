@@ -1,4 +1,4 @@
-const API = process.env.VITE_API_URL || '/api';
+const API = import.meta.env.VITE_API_URL || '/api';
 
 function authHeaders(token, extra = {}) {
   return {

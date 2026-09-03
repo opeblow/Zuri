@@ -255,9 +255,9 @@ function demoReason(transcript, memory, history = [], defaultLang = 'en') {
     // Anomaly: >3× usual
     const unusual = amount_kobo > bene.usual_amount_kobo * 3;
     const firstSend = bene.send_count === 0;
-    let reply_text = `I'll send ${formatNaira(amount_kobo)} to ${bene.full_name} (${bene.bank_name}). Confirm with your PIN to go ahead.`;
+    let reply_text = `I'll send ${formatNaira(amount_kobo)} to ${bene.nickname} (${bene.bank_name}). Confirm with your PIN to go ahead.`;
     if (unusual) {
-      reply_text = `That's more than 3× what you usually send ${bene.nickname}. Just checking — ${formatNaira(amount_kobo)} to ${bene.full_name}. Enter your PIN if that's right.`;
+      reply_text = `That's more than 3× what you usually send ${bene.nickname}. Just checking — ${formatNaira(amount_kobo)} to ${bene.nickname}. Enter your PIN if that's right.`;
     }
     if (firstSend) {
       reply_text = `First time sending to ${bene.full_name}. Cap on first sends is ₦20,000. Confirm with PIN to send ${formatNaira(Math.min(amount_kobo, 2_000_000))}.`;
@@ -653,9 +653,9 @@ export async function reasonOverTranscript(user, transcript, history = []) {
           const firstSend = bene?.send_count === 0;
           const unusual = amount > (bene?.usual_amount_kobo || 0) * 3;
           
-          let reply_text = `I'll send ${formatNaira(amount)} to ${bene.full_name} (${bene.bank_name}). Confirm with your PIN to go ahead.`;
+          let reply_text = `I'll send ${formatNaira(amount)} to ${bene.nickname} (${bene.bank_name}). Confirm with your PIN to go ahead.`;
           if (unusual) {
-            reply_text = `That's more than 3× what you usually send ${bene.nickname}. Just checking — ${formatNaira(amount)} to ${bene.full_name}. Enter your PIN if that's right.`;
+            reply_text = `That's more than 3× what you usually send ${bene.nickname}. Just checking — ${formatNaira(amount)} to ${bene.nickname}. Enter your PIN if that's right.`;
           }
           let finalAmount = amount;
           if (firstSend) {
@@ -795,7 +795,7 @@ export async function textToSpeech(text, language = 'en', voice = null) {
       },
       body: JSON.stringify({
         text,
-        voice: voice || process.env.YARNGPT_VOICE || 'Zainab',
+        voice: voice || process.env.YARNGPT_VOICE || 'Idera',
         response_format: 'mp3',
       }),
     },
