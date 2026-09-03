@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 
 export default function Welcome() {
   const { token, login } = useAuth();
-  if (token) return <Navigate to="/app" replace />;
+  if (token) return <Navigate to="/dashboard" replace />;
 
   async function demoLogin() {
     await api.resetDemo();
@@ -22,7 +22,7 @@ export default function Welcome() {
           Open an account
         </Link>
         <button type="button" className="btn btn-ghost" onClick={demoLogin}>
-          Enter demo (Amina)
+          Enter demo
         </button>
       </div>
     </section>

@@ -14,12 +14,6 @@ export default function Settings() {
   const { user, account, logout, token, setUser } = useAuth();
   const navigate = useNavigate();
 
-  async function resetDemo() {
-    await api.resetDemo();
-    logout();
-    navigate('/');
-  }
-
   async function selectLanguage(langId) {
     setUser({ ...user, language_pref: langId });
     try {
@@ -29,57 +23,101 @@ export default function Settings() {
     }
   }
 
+  function handleLogout() {
+    logout();
+    navigate('/');
+  }
+
+  const name = user?.full_name || 'Account';
+  const phone = user?.phone || '';
+  const initial = name.charAt(0).toUpperCase();
+  const accountNumber = account?.reserved_account || '—';
+  const bankName = 'Zuri';
+
   return (
-    <div className="panel">
-      <h1>You</h1>
-      <p className="lede">Language, limits, and account basics.</p>
-
-      <div className="row-card" style={{ marginBottom: 12 }}>
-        <h3>{user?.full_name}</h3>
-        <p>{user?.phone}</p>
-        <p style={{ marginTop: 8 }}>
-          Reserved: <strong>{account?.reserved_account}</strong> · {account?.bank_name}
-        </p>
+    <div className="settings-page">
+      <div className="settings-header">
+        <h1 className="settings-title">Settings</h1>
+        <p className="settings-subtitle">Language, limits, and account basics.</p>
       </div>
 
-      <div className="row-card" style={{ marginBottom: 12 }}>
-        <h3>Language</h3>
-        <p className="lede" style={{ marginBottom: 10 }}>
-          Pref: {getLanguageLabel(user?.language_pref)}
-        </p>
-        <div className="chip-row">
-          {LANGUAGES.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              className={`chip${user?.language_pref === l.id ? ' active' : ''}`}
-              onClick={() => selectLanguage(l.id)}
-            >
-              {l.label}
-            </button>
-          ))}
+      <div className="settings-content">
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <h2 className="settings-card-title">Profile</h2>
+          </div>
+          <div className="settings-profile">
+            <div className="settings-avatar">{initial}</div>
+            <div className="settings-profile-info">
+              <span className="settings-profile-name">{name}</span>
+              {phone && <span className="settings-profile-phone">{phone}</span>}
+            </div>
+          </div>
+          <div className="settings-detail-rows">
+            <div className="settings-detail-row">
+              <span className="settings-detail-label">Full name</span>
+              <span className="settings-detail-value">{name}</span>
+            </div>
+            {accountNumber && accountNumber !== '—' && (
+              <div className="settings-detail-row">
+                <span className="settings-detail-label">Account number</span>
+                <span className="settings-detail-value settings-detail-mono">{accountNumber}</span>
+              </div>
+            )}
+            {bankName && (
+              <div className="settings-detail-row">
+                <span className="settings-detail-label">Bank</span>
+                <span className="settings-detail-value">{bankName}</span>
+              </div>
+            )}
+            <div className="settings-detail-row">
+              <span className="settings-detail-label">Security PIN</span>
+              <span className="settings-detail-value">••••</span>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="row-card" style={{ marginBottom: 12 }}>
-        <h3>Biometric daily limit</h3>
-        <p>₦{((user?.daily_biometric_limit_kobo || 2_000_000) / 100).toLocaleString()} — larger sends always need PIN.</p>
-      </div>
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <h2 className="settings-card-title">Language</h2>
+            <span className="settings-card-meta">Current: {getLanguageLabel(user?.language_pref)}</span>
+          </div>
+          <div className="settings-lang-grid">
+            {LANGUAGES.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                className={`settings-lang-btn${user?.language_pref === l.id ? ' active' : ''}`}
+                onClick={() => selectLanguage(l.id)}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-      <button type="button" className="btn btn-soft" style={{ width: '100%', marginBottom: 10 }} onClick={resetDemo}>
-        Reset demo data
-      </button>
-      <button
-        type="button"
-        className="btn btn-ink"
-        style={{ width: '100%' }}
-        onClick={() => {
-          logout();
-          navigate('/');
-        }}
-      >
-        Log out
-      </button>
+        <div className="settings-card">
+          <div className="settings-card-header">
+            <h2 className="settings-card-title">Security</h2>
+          </div>
+          <div className="settings-detail-rows">
+            <div className="settings-detail-row">
+              <span className="settings-detail-label">Biometric daily limit</span>
+              <span className="settings-detail-value">
+                ₦{((user?.daily_biometric_limit_kobo || 2_000_000) / 100).toLocaleString()}
+              </span>
+            </div>
+            <div className="settings-detail-row">
+              <span className="settings-detail-label">PIN required above</span>
+              <span className="settings-detail-value">Larger sends</span>
+            </div>
+          </div>
+        </div>
+
+        <button type="button" className="settings-logout-btn" onClick={handleLogout}>
+          Log out
+        </button>
+      </div>
     </div>
   );
 }

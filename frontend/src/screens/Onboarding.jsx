@@ -11,7 +11,7 @@ const LANGS = [
 ];
 
 export default function Onboarding() {
-  const { signup, login, account } = useAuth();
+  const { signup, login } = useAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [mode, setMode] = useState('signup');
@@ -21,10 +21,10 @@ export default function Onboarding() {
     full_name: '',
     phone: '',
     email: '',
+    password: '',
     language_pref: 'en',
     pin: '',
   });
-  const [readyAccount, setReadyAccount] = useState(null);
 
   function set(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -41,8 +41,7 @@ export default function Onboarding() {
     setError('');
     try {
       const data = await signup(form);
-      setReadyAccount(data.account);
-      setStep(3);
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(typeof err.message === 'string' ? err.message : 'Signup failed');
     } finally {
@@ -55,7 +54,7 @@ export default function Onboarding() {
     setError('');
     try {
       await login(form.phone, form.pin);
-      navigate('/app');
+      navigate('/dashboard');
     } catch (err) {
       setError(err.message || 'Login failed');
       set('pin', '');
@@ -65,23 +64,23 @@ export default function Onboarding() {
   }
 
   return (
-    <div className="phone">
-      <div className="panel">
+    <div className="phone onboarding-screen">
+      <div className="panel onboarding-panel">
         <Link to="/" style={{ color: 'var(--muted)', fontWeight: 600, fontSize: '0.85rem' }}>
           ← Back
         </Link>
 
         {step === 0 && (
-          <>
+          <div className="onboarding-intro">
             <h1 style={{ marginTop: 18 }}>Zuri</h1>
             <p className="lede">Talk to your money. It talks back — in English, Pidgin, or Yoruba.</p>
-            <button type="button" className="btn btn-ink" style={{ width: '100%', marginBottom: 10 }} onClick={() => { setMode('signup'); setStep(1); }}>
+            <button type="button" className="btn btn-ink" style={{ width: '100%', marginBottom: 10 }} onClick={() => { setMode('signup'); setStep(1); setError(''); }}>
               Create account
             </button>
-            <button type="button" className="btn btn-soft" style={{ width: '100%' }} onClick={() => { setMode('login'); setStep(1); }}>
+            <button type="button" className="btn btn-soft" style={{ width: '100%' }} onClick={() => { setMode('login'); setStep(1); setError(''); }}>
               I already have one
             </button>
-          </>
+          </div>
         )}
 
         {step === 1 && mode === 'signup' && (
@@ -90,7 +89,7 @@ export default function Onboarding() {
             <p className="lede">We'll provide a Monnify reserved account behind the scenes.</p>
             <div className="field">
               <label>Full name</label>
-              <input value={form.full_name} onChange={(e) => set('full_name', e.target.value)} placeholder="Amina Okonkwo" />
+              <input value={form.full_name} onChange={(e) => set('full_name', e.target.value)} placeholder="Your full name" />
             </div>
             <div className="field">
               <label>Phone</label>
@@ -98,7 +97,11 @@ export default function Onboarding() {
             </div>
             <div className="field">
               <label>Email</label>
-              <input value={form.email} onChange={(e) => set('email', e.target.value)} placeholder="you@email.com" />
+              <input type="email" value={form.email} onChange={(e) => set('email', e.target.value)} placeholder="you@email.com" />
+            </div>
+            <div className="field">
+              <label>Password</label>
+              <input type="password" value={form.password} onChange={(e) => set('password', e.target.value)} placeholder="Create a password" />
             </div>
             <p style={{ fontWeight: 600, marginBottom: 8 }}>Language</p>
             <div className="chip-row">
@@ -117,7 +120,7 @@ export default function Onboarding() {
               type="button"
               className="btn btn-ink"
               style={{ width: '100%' }}
-              disabled={!form.full_name || !form.phone || !form.email}
+              disabled={!form.full_name || !form.phone || !form.email || form.password.length < 8}
               onClick={() => setStep(2)}
             >
               Set my PIN
@@ -183,32 +186,6 @@ export default function Onboarding() {
           </>
         )}
 
-        {step === 3 && (
-          <>
-            <h1 style={{ marginTop: 18 }}>You're ready</h1>
-            <p className="lede">Your Zuri account is live. Fund it from any bank to start talking.</p>
-            <div className="row-card">
-              <p style={{ marginBottom: 4 }}>Reserved account</p>
-              <h3 style={{ fontSize: '1.4rem', letterSpacing: '0.04em' }}>
-                {readyAccount?.reserved_account || account?.reserved_account}
-              </h3>
-              <p>{readyAccount?.bank_name || account?.bank_name}</p>
-              <button
-                type="button"
-                className="btn btn-soft"
-                style={{ marginTop: 12, width: '100%' }}
-                onClick={() =>
-                  navigator.clipboard?.writeText(readyAccount?.reserved_account || account?.reserved_account || '')
-                }
-              >
-                Copy account number
-              </button>
-            </div>
-            <button type="button" className="btn btn-ink" style={{ width: '100%', marginTop: 16 }} onClick={() => navigate('/app')}>
-              Start talking
-            </button>
-          </>
-        )}
       </div>
     </div>
   );

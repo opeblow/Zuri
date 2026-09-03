@@ -1,26 +1,31 @@
 import { useEffect } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, Link } from 'react-router-dom';
 import { useAuth } from '../state/AuthContext.jsx';
 import { speakText } from '../lib/api.js';
+import '../styles/dashboard.css';
 
-const tabs = [
-  { to: '/app', end: true, label: 'Talk', icon: MicIcon },
-  { to: '/app/goals', label: 'Goals', icon: GoalIcon },
-  { to: '/app/people', label: 'People', icon: PeopleIcon },
-  { to: '/app/activity', label: 'Activity', icon: ActivityIcon },
-  { to: '/app/settings', label: 'You', icon: UserIcon },
+const nav = [
+  { to: '/dashboard', end: true, label: 'Home', icon: HomeIcon },
+  { to: '/dashboard/goals', label: 'Goals', icon: GoalIcon },
+  { to: '/dashboard/people', label: 'Beneficiaries', icon: PeopleIcon },
+  { to: '/dashboard/activity', label: 'Transactions', icon: ActivityIcon },
+  { to: '/dashboard/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
 export default function Shell() {
-  const { token, refreshAccount } = useAuth();
+  const { token, user, refreshAccount } = useAuth();
+  const name = (user?.full_name || user?.name || '').split(' ')[0] || 'Account';
+  const initial = name.charAt(0).toUpperCase();
 
   useEffect(() => {
+    if (!token || token === 'null' || token === 'undefined') return;
+
     let aborted = false;
     const controller = new AbortController();
 
     (async () => {
       try {
-        const res = await fetch('/api/events/stream', {
+        const res = await fetch(`/api/events/stream?token=${encodeURIComponent(token)}`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
         });
@@ -42,7 +47,9 @@ export default function Shell() {
               const speak = payload.message.spoken_text || payload.message.text;
               speakText(speak, payload.message.language, payload.message.audio_url);
               refreshAccount();
-              window.dispatchEvent(new CustomEvent('zuri_proactive_message', { detail: payload.message }));
+              window.dispatchEvent(
+                new CustomEvent('zuri_proactive_message', { detail: payload.message }),
+              );
             }
             if (payload.type === 'refresh') {
               refreshAccount();
@@ -62,72 +69,96 @@ export default function Shell() {
   }, [token, refreshAccount]);
 
   return (
-    <div className="phone">
-      <div className="shell">
-        <div className="shell-main">
-          <Outlet />
-        </div>
-        <nav className="tabbar" aria-label="Main">
-          {tabs.map((t) => (
+    <div className="dashboard-layout">
+      <aside className="dashboard-sidebar">
+        <div className="sidebar-logo">Zuri</div>
+        <nav className="sidebar-nav">
+          {nav.map((n) => (
             <NavLink
-              key={t.to}
-              to={t.to}
-              end={t.end}
-              className={({ isActive }) => `tab${isActive ? ' active' : ''}`}
+              key={n.to}
+              to={n.to}
+              end={n.end}
+              className={({ isActive }) => `sidebar-nav-link${isActive ? ' active' : ''}`}
             >
-              <t.icon />
-              {t.label}
+              <n.icon />
+              <span>{n.label}</span>
             </NavLink>
           ))}
         </nav>
-      </div>
+        <div className="sidebar-bottom">
+          <Link to="/" className="sidebar-back-link">
+            <BackIcon />
+            <span>Go back</span>
+          </Link>
+          <NavLink to="/dashboard/settings" className="sidebar-user">
+          <div className="sidebar-avatar">{initial}</div>
+          <div className="sidebar-user-info">
+            <div className="sidebar-user-name">{name}</div>
+            <div className="sidebar-user-role">View profile</div>
+          </div>
+        </NavLink>
+        </div>
+      </aside>
+
+      <main className="dashboard-main">
+        <Outlet />
+      </main>
     </div>
   );
 }
 
-function MicIcon() {
+function HomeIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z" />
-      <path d="M19 11a7 7 0 0 1-14 0M12 18v3" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z" />
+      <polyline points="9 21 9 12 15 12 15 21" />
     </svg>
   );
 }
 
 function GoalIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="12" r="8" />
-      <circle cx="12" cy="12" r="4" />
-      <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
     </svg>
   );
 }
 
 function PeopleIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" />
-      <circle cx="9.5" cy="7.5" r="3.5" />
-      <path d="M20 21v-2a3.5 3.5 0 0 0-2.5-3.3" />
-      <path d="M16 4.2a3.5 3.5 0 0 1 0 6.6" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
     </svg>
   );
 }
 
 function ActivityIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M4 14h4l2-6 3 10 2-5h5" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   );
 }
 
-function UserIcon() {
+function SettingsIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="8" r="4" />
-      <path d="M4 20a8 8 0 0 1 16 0" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+    </svg>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
     </svg>
   );
 }

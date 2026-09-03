@@ -1,7 +1,8 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './state/AuthContext.jsx';
 import Shell from './components/Shell.jsx';
-import Welcome from './screens/Welcome.jsx';
+import Landing from './screens/Landing.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Home from './screens/Home.jsx';
 import Goals from './screens/Goals.jsx';
@@ -9,29 +10,44 @@ import Beneficiaries from './screens/Beneficiaries.jsx';
 import History from './screens/History.jsx';
 import Settings from './screens/Settings.jsx';
 
+function ScrollToTop() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
+
 function Private({ children }) {
-  const { token, booting } = useAuth();
+  const { booting, token } = useAuth();
   if (booting) {
     return (
-      <div className="boot">
-        <div className="boot-mark">Zuri</div>
-        <p>Waking your money up…</p>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div className="boot">
+          <div className="boot-mark">Zuri</div>
+          <p>Waking your money up…</p>
+        </div>
       </div>
     );
   }
-  if (!token) return <Navigate to="/" replace />;
+  if (!token) return <Navigate to="/onboarding" replace />;
   return children;
 }
 
 export default function App() {
+  const { pathname } = useLocation();
+  const isLanding = pathname === '/';
+  const isDashboard = pathname.startsWith('/dashboard');
+
   return (
-    <div className="app-frame">
-      <div className="phone-glow" aria-hidden />
+    <div className={isLanding || isDashboard ? undefined : 'app-frame'}>
+      {!isLanding && !isDashboard && <div className="phone-glow" aria-hidden />}
+      <ScrollToTop />
       <Routes>
-        <Route path="/" element={<Welcome />} />
+        <Route path="/" element={<Landing />} />
         <Route path="/onboarding" element={<Onboarding />} />
         <Route
-          path="/app"
+          path="/dashboard"
           element={
             <Private>
               <Shell />

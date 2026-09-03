@@ -1,5 +1,21 @@
 const API = import.meta.env.VITE_API_URL || '/api';
 
+export class AuthError extends Error {
+  constructor(message = 'Session expired. Please log in again.') {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+function freshToken() {
+  const t = localStorage.getItem('zuri_token') || localStorage.getItem('token') || localStorage.getItem('access_token') || '';
+  return t && t !== 'undefined' && t !== 'null' ? t : '';
+}
+
+function createIdempotencyKey() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function authHeaders(token, extra = {}) {
   return {
     'Content-Type': 'application/json',
@@ -8,16 +24,23 @@ function authHeaders(token, extra = {}) {
   };
 }
 
-async function request(path, { token, method = 'GET', body } = {}) {
+async function request(path, { token, method = 'GET', body, requireAuth = false, extraHeaders = {} } = {}) {
+  const effectiveToken = token || freshToken();
+  if (requireAuth && !effectiveToken) {
+    throw new AuthError();
+  }
   const res = await fetch(`${API}${path}`, {
     method,
-    headers: authHeaders(token),
+    headers: authHeaders(effectiveToken, extraHeaders),
     body: body ? JSON.stringify(body) : undefined,
     cache: 'no-store',
   });
+  if (res.status === 401) {
+    throw new AuthError();
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    let msg = data.error || data.message || 'Request failed';
+    let msg = data.error || data.message || data.detail || 'Request failed';
     if (typeof msg === 'object') {
       msg = Array.isArray(msg) ? msg.map(e => e.message || JSON.stringify(e)).join(', ') : JSON.stringify(msg);
     }
@@ -35,11 +58,20 @@ export const api = {
   goals: (token) => request('/goals', { token }),
   beneficiaries: (token) => request('/beneficiaries', { token }),
   addBeneficiary: (token, body) => request('/beneficiaries', { token, method: 'POST', body }),
+  deleteBeneficiary: (token, id) => request(`/beneficiaries/${id}`, { token, method: 'DELETE' }),
   resolveBeneficiary: (token, body) => request('/beneficiaries/resolve', { token, method: 'POST', body }),
   banks: () => request('/beneficiaries/banks'),
+  fetchBanks: () => request('/banks'),
   history: (token) => request('/conversation/history', { token }),
   talk: (token, text, voice) => request('/conversation/text', { token, method: 'POST', body: { text, voice } }),
-  transfer: (token, body) => request('/actions/transfer', { token, method: 'POST', body }),
+  transfer: (token, body, idempotencyKey = createIdempotencyKey()) =>
+    request('/transactions/transfer', {
+      token: token || freshToken(),
+      method: 'POST',
+      body,
+      requireAuth: true,
+      extraHeaders: { 'Idempotency-Key': idempotencyKey },
+    }),
   createGoal: (token, body) => request('/actions/goal', { token, method: 'POST', body }),
   depositGoal: (token, id, body) =>
     request(`/actions/goals/${id}/deposit`, { token, method: 'POST', body }),
@@ -104,6 +136,14 @@ export const api = {
     }
   },
 };
+
+export function handleAuthError() {
+  localStorage.removeItem('zuri_token');
+  localStorage.removeItem('token');
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('zuri_user');
+  window.location.href = '/';
+}
 
 export const LANGUAGE_NAMES = {
   en: 'English',

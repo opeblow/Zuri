@@ -30,10 +30,10 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || token === 'null' || token === 'undefined') return;
 
     const eventSource = new EventSource(`/api/events/stream?token=${token}`);
-    
+
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -53,6 +53,7 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   function persist(nextToken, nextUser) {
+    if (!nextToken) return;
     setToken(nextToken);
     setUser(nextUser);
     localStorage.setItem('zuri_token', nextToken);
@@ -69,30 +70,32 @@ export function AuthProvider({ children }) {
 
   async function login(phone, pin) {
     const data = await api.login(phone, pin);
-    persist(data.token, data.user);
-    const acc = await api.account(data.token);
+    const tok = data.access_token || data.token;
+    persist(tok, data.user);
+    const acc = await api.account(tok);
     setAccount(acc);
     return data;
   }
 
   async function signup(payload) {
     const data = await api.signup(payload);
-    persist(data.token, data.user);
-    setAccount({
-      reserved_account: data.account.reserved_account,
-      bank_name: data.account.bank_name,
-      balance_kobo: data.account.balance_kobo,
-      balance_display: formatLocal(data.account.balance_kobo),
-      monthly_summary: { inflow_kobo: 0, outflow_kobo: 0 },
-    });
+    const tok = data.access_token || data.token;
+    const acc = await api.account(tok);
+    persist(tok, { full_name: acc.full_name });
+    setAccount(acc);
     return data;
   }
 
   async function refreshAccount() {
     if (!token) return;
-    const acc = await api.account(token);
-    setAccount(acc);
-    return acc;
+    try {
+      const acc = await api.account(token);
+      setAccount(acc);
+      return acc;
+    } catch (err) {
+      console.error('Failed to refresh account:', err);
+      return null;
+    }
   }
 
   const value = useMemo(
