@@ -12,10 +12,6 @@ function freshToken() {
   return t && t !== 'undefined' && t !== 'null' ? t : '';
 }
 
-function createIdempotencyKey() {
-  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 function authHeaders(token, extra = {}) {
   return {
     'Content-Type': 'application/json',
@@ -56,84 +52,38 @@ export const api = {
   account: (token) => request('/account', { token }),
   transactions: (token) => request('/transactions/', { token }),
   goals: (token) => request('/goals', { token }),
-  beneficiaries: (token) => request('/beneficiaries/', { token }),
-  addBeneficiary: (token, body) => request('/beneficiaries/', { token, method: 'POST', body }),
-  deleteBeneficiary: (token, id) => request(`/beneficiaries/${id}`, { token, method: 'DELETE' }),
-  resolveBeneficiary: (token, body) => request('/beneficiaries/resolve', { token, method: 'POST', body }),
-  banks: () => request('/beneficiaries/banks'),
-  fetchBanks: () => request('/banks'),
-  history: (token) => request('/conversation/history', { token }),
   talk: (token, text, voice) => request('/conversation/text', { token, method: 'POST', body: { text, voice } }),
-  transfer: (token, body, idempotencyKey = createIdempotencyKey()) =>
-    request('/transactions/transfer', {
-      token: token || freshToken(),
+  conversationHistory: (token) => request('/conversation/history', { token }),
+  insights: (token) => request('/insights/', { token }),
+  talkAudio: async (token, blob) => {
+    const effectiveToken = token || freshToken();
+    const form = new FormData();
+    form.append('file', blob, 'voice.webm');
+    const res = await fetch(`${API}/conversation/audio`, {
       method: 'POST',
-      body,
-      requireAuth: true,
-      extraHeaders: { 'Idempotency-Key': idempotencyKey },
-    }),
+      headers: effectiveToken ? { Authorization: `Bearer ${effectiveToken}` } : {},
+      body: form,
+      cache: 'no-store',
+    });
+    if (res.status === 401) throw new AuthError();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || data.message || 'Voice request failed');
+    return data;
+  },
+  logTransaction: (token, body) => request('/transactions/log', { token, method: 'POST', body }),
+  recategorizeTransaction: (token, id, category) =>
+    request(`/transactions/${id}`, { token, method: 'PATCH', body: { category } }),
+  onboardingSetup: (token, body) => request('/onboarding/setup', { token, method: 'POST', body }),
   createGoal: (token, body) => request('/actions/goal', { token, method: 'POST', body }),
   depositGoal: (token, id, body) =>
     request(`/actions/goals/${id}/deposit`, { token, method: 'POST', body }),
   withdrawGoal: (token, id, body) =>
     request(`/actions/goals/${id}/withdraw`, { token, method: 'POST', body }),
-  verifyAccount: (token, body) => request('/actions/verify-account', { token, method: 'POST', body }),
-  salaryDemo: (token) => request('/demo/salary-landed', { token, method: 'POST', body: {} }),
   patchGoal: (token, id, body) =>
     request(`/actions/goals/${id}`, { token, method: 'PATCH', body }),
   updateProfile: (token, body) =>
     request('/settings/profile', { token, method: 'PATCH', body }),
-
-  /**
-   * SSE streaming conversation.
-   * Sends the user's text and calls onDecision when the decision event arrives.
-   * Returns a promise that resolves when the stream ends.
-   */
-  talkStream: async (token, text, voice, { onStatus, onDecision, onError }) => {
-    const res = await fetch(`${API}/conversation/text-stream`, {
-      method: 'POST',
-      headers: authHeaders(token),
-      body: JSON.stringify({ text, voice }),
-      cache: 'no-store',
-    });
-
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Stream request failed');
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let currentEvent = null;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          currentEvent = line.slice(7).trim();
-        } else if (line.startsWith('data: ') && currentEvent) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (currentEvent === 'status' && onStatus) onStatus(data);
-            else if (currentEvent === 'decision' && onDecision) onDecision(data);
-            else if (currentEvent === 'error' && onError) onError(data);
-          } catch (err) {
-            console.error('SSE JSON parse error:', err);
-          }
-          currentEvent = null;
-        } else if (line === '') {
-          // Empty line usually means end of an event block, but we clear currentEvent after reading data anyway.
-        }
-      }
-    }
-  },
+  resetDemo: (token) => request('/demo/reset', { token, method: 'POST', body: {} }),
 };
 
 export function handleAuthError() {

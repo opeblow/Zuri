@@ -6,7 +6,6 @@ import Landing from './screens/Landing.jsx';
 import Onboarding from './screens/Onboarding.jsx';
 import Home from './screens/Home.jsx';
 import Goals from './screens/Goals.jsx';
-import Beneficiaries from './screens/Beneficiaries.jsx';
 import History from './screens/History.jsx';
 import Settings from './screens/Settings.jsx';
 
@@ -36,12 +35,10 @@ function Private({ children }) {
 
 export default function App() {
   const { pathname } = useLocation();
-  const isLanding = pathname === '/';
-  const isDashboard = pathname.startsWith('/dashboard');
+  const isFullBleed = pathname === '/' || pathname.startsWith('/dashboard') || pathname === '/onboarding';
 
   return (
-    <div className={isLanding || isDashboard ? undefined : 'app-frame'}>
-      {!isLanding && !isDashboard && <div className="phone-glow" aria-hidden />}
+    <div className={isFullBleed ? undefined : 'app-frame'}>
       <ScrollToTop />
       <Routes>
         <Route path="/" element={<Landing />} />
@@ -56,7 +53,6 @@ export default function App() {
         >
           <Route index element={<Home />} />
           <Route path="goals" element={<Goals />} />
-          <Route path="people" element={<Beneficiaries />} />
           <Route path="activity" element={<History />} />
           <Route path="settings" element={<Settings />} />
         </Route>

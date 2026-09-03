@@ -5,9 +5,10 @@
 <h1 align="center">Zuri — Your money, out loud.</h1>
 
 <p align="center">
-  A conversational money app built for the <strong>APIConf Hackathon</strong>.<br/>
-  Ask in English, Pidgin, Yoruba, Igbo or Hausa. Zuri thinks, confirms, and moves
-  your money — every transfer PIN-protected and idempotent.
+  An AI money diary built for the <strong>APIConf Hackathon</strong>.<br/>
+  Tell Zuri what you earned or spent — by voice or text, in English, Pidgin, Yoruba,
+  Igbo or Hausa — and it narrates your money back to you: what changed, what's
+  recurring, what's odd, and how many days your balance actually covers.
 </p>
 
 <p align="center">
@@ -22,17 +23,41 @@
 
 ---
 
+## Why a diary, not a bank connection
+
+Zuri doesn't touch a real bank account and never asks for banking
+credentials. You tell it what came in or went out — by typing, or just
+saying it out loud — and that log is the entire source of truth. No OAuth
+consent screen, no OTP, nothing to sync or hack. In exchange for a little
+self-reporting, the app can run entirely on real numbers you control, with
+no external payment rails to keep alive for a demo.
+
 ## Features
 
-- **Voice-first banking** — type or talk; Zuri replies in speech and text.
+- **Spend intelligence, computed not guessed** — a deterministic engine
+  (`insights_service.py`) turns logged entries into runway/burn-rate,
+  week-over-week and month-over-month trend, category breakdown,
+  recurring-charge detection, spending anomalies, and goal-vs-reality risk
+  flags. The AI quotes these numbers verbatim — it never invents them.
+- **Real voice loop** — tap the mic and talk. A live caption shows what
+  Zuri's hearing while you speak (browser speech recognition), the audio is
+  transcribed accurately with Whisper once you stop, and the reply is
+  spoken back via OpenAI TTS. Typed questions get spoken replies too.
+- **An agent that takes action** — mention any amount you earned or spent in
+  plain language ("just got paid 200k", "spent 3k on fuel") and Zuri logs it
+  immediately via a tool call, then confirms with your new balance. Ask it to
+  set up a savings goal and it computes a monthly pace for you.
 - **Multi-language** — English, Pidgin, Yoruba, Igbo, Hausa.
-- **Money movements** — send money, pay bills, buy airtime & data, with bank account verification.
-- **Savings goals** — create goals by voice, auto-deposit, track progress.
-- **Beneficiaries** — nickname + verified account; transfers only go to saved people.
-- **Smart history** — every transaction categorised (income, transfers, bills, lifestyle, shopping).
-- **PIN-secured** — 4-digit PIN hashed with bcrypt; required before any transfer.
-- **Demo money** — no pre-seeded data; you sign up fresh, and every new account gets a
-  welcome bonus (or a "Top up" button) so transfers can be demoed instantly.
+- **Conversation history persists** — every exchange is stored server-side,
+  so refreshing the page doesn't lose the chat.
+- **Savings goals** — create goals by voice or form, deposit/withdraw,
+  track progress, with goal-at-risk warnings when commitments outpace what's
+  actually disposable.
+- **Onboarding that seeds real history** — new users enter a starting
+  balance, rough monthly income, and 1–2 recurring expenses; Zuri backdates
+  a bit of transaction history so insights have something to say from day one.
+- **PIN-secured** — 4-digit PIN hashed with bcrypt, separate from the
+  account password.
 
 ## Tech stack
 
@@ -41,8 +66,7 @@
 | Frontend   | React 19, Vite 6, React Router 7          |
 | Backend    | Python 3.12, FastAPI, SQLite, Uvicorn     |
 | Auth       | JWT (python-jose), bcrypt / passlib       |
-| Payments   | Monnify (reserved accounts, transfers, direct-debit mandates, webhooks) |
-| AI         | OpenAI (chat + speech-to-text)            |
+| AI         | OpenAI (chat + tool-calling, Whisper speech-to-text, TTS) |
 
 ## Project structure
 
@@ -59,26 +83,28 @@ zuri/
 │       ├── schemas.py             # Pydantic request/response models
 │       ├── routers/
 │       │   ├── auth.py            # signup, login, verify-pin, JWT guard
-│       │   ├── account.py         # balance, banks, demo events
-│       │   ├── beneficiaries.py   # saved beneficiaries + Paystack resolve
-│       │   ├── conversation.py    # chat + voice (text/audio)
+│       │   ├── account.py         # balance, demo reset
+│       │   ├── onboarding.py      # seeds starting balance + history
+│       │   ├── conversation.py    # chat + voice (text/audio), history
 │       │   ├── goals.py           # savings goal lifecycle
+│       │   ├── insights.py        # computed spend-intelligence endpoint
 │       │   ├── settings.py        # profile, PIN change, delete account
-│       │   └── transactions.py    # history, transfer, re-categorise
+│       │   └── transactions.py    # history, manual log, re-categorise
 │       └── services/
-│           ├── ai_service.py      # chat + speech-to-text
+│           ├── ai_service.py      # chat agent, tool-calling, speech I/O
+│           ├── insights_service.py # deterministic insights engine
+│           ├── ledger_service.py  # balance + transaction bookkeeping
 │           └── auth_service.py    # bcrypt PIN + JWT helpers
 └── frontend/                      # React app
     ├── vite.config.js             # /api proxy -> backend :4000
     └── src/
         ├── App.jsx / main.jsx
-        ├── styles.css + styles/   # landing, dashboard
-        ├── lib/api.js             # typed API client + SSE streaming
+        ├── styles.css + styles/   # landing, onboarding, dashboard
+        ├── lib/api.js             # typed API client
         ├── state/AuthContext.jsx
-        ├── screens/               # Landing, Welcome, Onboarding, Home,
-        │                          # Goals, Beneficiaries, History, Settings
-        └── components/            # Shell, PinModal, SendMoneyModal,
-                                   # PayBillsModal, AirtimeDataModal, ...
+        ├── screens/               # Landing, Onboarding, Home, Goals,
+        │                          # History, Settings
+        └── components/            # Shell, PinModal, Reveal
 ```
 
 ## Getting started
@@ -88,122 +114,77 @@ zuri/
 - [Python 3.12+](https://www.python.org/downloads/)
 - [Node.js 18+](https://nodejs.org/)
 
-### 1. Backend
+### Quick start (both servers together)
 
 ```bash
+pip install -r backend/requirements.txt
+cd frontend && npm install && cd ..
+cp backend/.env.example backend/.env    # then set OPENAI_API_KEY
+npm install                             # installs the root dev-runner
+npm run dev
+```
+
+Open **http://localhost:5173** — the Vite dev server proxies `/api` to the
+backend on `:4000`. See [`DEPLOY_DEMO.md`](DEPLOY_DEMO.md) for a full demo
+script and mic-quality tips before recording.
+
+### Running the two servers separately
+
+```bash
+# Backend
 cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env    # Windows · macOS/Linux: cp .env.example .env
+cp .env.example .env
 uvicorn app.main:app --reload --port 4000
-```
 
-The SQLite DB (`backend/zuri.db`) is created automatically on first boot (tables +
-migrations only — no seed data) — no migration step needed.
-
-### 2. Frontend
-
-```bash
+# Frontend
 cd frontend
 npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** — the Vite dev server proxies `/api` to the backend.
+The SQLite DB (`backend/zuri.db`) is created automatically on first boot
+(tables + migrations only — no seed data).
 
 All amounts are stored in **kobo** (₦1 = 100 kobo); the UI renders naira.
 
 ## Environment variables
 
-| Variable              | Required | Description                              |
-| --------------------- | -------- | ---------------------------------------- |
-| `PORT`                | no       | API port (default `8000`)                |
-| `NODE_ENV`            | no       | `development` accepts dev-mode tokens    |
-| `JWT_SECRET`          | yes      | Secret used to sign access tokens        |
-| `OPENAI_API_KEY`      | no       | Chat + speech-to-text (blank = fallback) |
-| `PAYSTACK_SECRET_KEY` | no       | Transfers + bank account resolution      |
-| `PAYSTACK_PUBLIC_KEY` | no       | Paystack public key (frontend checkout)  |
-| `MONNIFY_API_KEY`     | no*      | Monnify API key (sandbox/live)           |
-| `MONNIFY_SECRET_KEY`  | no*      | Monnify secret key (sandbox/live)        |
-| `MONNIFY_CONTRACT_CODE` | no*    | Monnify contract code for reserved accounts & mandates |
-| `MONNIFY_BASE_URL`    | no*      | `https://sandbox.monnify.com` by default |
-| `MONNIFY_WALLET_ACCOUNT_NUMBER` | no* | Disbursement wallet account (Dashboard > Disbursement) |
-
-\* Without `MONNIFY_*` keys the app runs in **demo mode** (simulated money
-movement) — perfect for a no-keys bootstrap. Provide real values to use the
-Monnify rails.
-
-## Monnify integration & webhooks
-
-Zuri already wires the real Monnify Sandbox APIs:
-
-- **Reserved account on signup** — every new user gets a virtual account number.
-- **Name Inquiry** — beneficiary accounts verified via Monnify before transfer.
-- **Transfers** — idempotent, PIN-gated, OTP-authorised (MFA is on by default).
-- **Direct-debit mandates** — set up recurring savings on a goal, then auto-save.
-- **Webhooks** — incoming reserved-account payments auto-credit a user's wallet.
-
-### Webhook URL (Monnify dashboard)
-
-Set the **transaction completion / account** webhook URL in your Monnify
-Dashboard (Developers → Webhook URLs) to:
-
-```
-https://<your-public-host>/api/webhooks/monnify
-```
-
-It is verified with HMAC-SHA512 via the `monnify-signature` header. **Note:**
-sandbox webhooks omit the signature header and Monnify's production webhook IP
-is `35.242.133.146` — whitelist it in production.
-
-### Receiving webhooks locally (tunnel)
-
-Monnify can't reach `localhost`, so expose the backend with a tunnel:
-
-```bash
-ngrok http 4000
-# → https://<random>.ngrok.io/api/webhooks/monnify  (use this as the webhook URL)
-```
-
-Keep `uvicorn app.main:app --port 4000` running; the tunnel forwards Monnify's
-POST to your machine.
-
-### Testing money-in (sandbox)
-
-Real banks/apps (e.g. Opay) **cannot** fund Monnify sandbox virtual accounts —
-that's expected (they're gateway-provisioned). Use the
-[Monnify payment simulator](https://websim.sdk.monnify.com/?#/bankingapp) to
-deposit into a reserved account, which triggers the webhook and credits the
-user's wallet. Alternatively use `POST /api/demo/salary-landed` for a local
-credit during a walkthrough.
-
+| Variable         | Required | Description                                    |
+| ---------------- | -------- | ----------------------------------------------- |
+| `PORT`           | no       | API port (default `8000`; the dev script uses `4000`) |
+| `NODE_ENV`       | no       | `development` accepts dev-mode/unverified tokens |
+| `JWT_SECRET`     | yes      | Secret used to sign access tokens               |
+| `OPENAI_API_KEY` | no       | Chat agent, Whisper transcription, TTS — blank disables the AI features |
+| `ALLOWED_ORIGINS`| no       | Comma-separated extra CORS origins (besides localhost:5173/3000) |
 
 ## API overview
 
 | Method | Endpoint                             | Description                      |
 | ------ | ------------------------------------ | -------------------------------- |
-| POST   | `/api/auth/signup`                   | Register with phone + PIN         |
+| POST   | `/api/auth/signup`                   | Register with phone + password + PIN |
 | POST   | `/api/auth/login`                    | Login with phone + PIN → JWT      |
-| POST   | `/api/auth/verify-pin`               | Validate a PIN before a transfer  |
-| GET    | `/api/account`                       | Balance + reserved account        |
-| GET    | `/api/transactions`                  | Categorised transaction history   |
-| POST   | `/api/transactions/transfer`         | Idempotent, PIN-gated transfer    |
-| POST   | `/api/transactions/transfer/authorize` | Complete a transfer with the Monnify OTP |
-| GET    | `/api/beneficiaries`                 | Saved beneficiaries               |
-| POST   | `/api/beneficiaries/resolve`         | Verify account number (Monnify Name Inquiry) |
-| GET    | `/api/beneficiaries/banks`           | List Nigerian banks               |
+| POST   | `/api/auth/verify-pin`               | Validate a PIN                    |
+| POST   | `/api/onboarding/setup`              | Seed starting balance + recurring history |
+| GET    | `/api/account`                       | Balance                           |
+| GET    | `/api/transactions/`                 | Logged transaction history        |
+| POST   | `/api/transactions/log`              | Manually log income/expense       |
+| PATCH  | `/api/transactions/{id}`             | Re-categorise a transaction       |
 | GET    | `/api/goals`                         | Savings goals                     |
 | POST   | `/api/actions/goal`                  | Create a goal                     |
+| PATCH  | `/api/actions/goals/{id}`            | Update a goal                     |
 | POST   | `/api/actions/goals/{id}/deposit`    | Deposit into a goal               |
 | POST   | `/api/actions/goals/{id}/withdraw`   | Withdraw from a goal              |
-| POST   | `/api/actions/goals/{id}/mandate`    | Set up a direct-debit auto-save mandate |
-| POST   | `/api/actions/goals/{id}/auto-save`  | Trigger a recurring auto-save debit |
-| POST   | `/api/webhooks/monnify`              | Monnify webhook (top-ups credit wallet) |
+| DELETE | `/api/actions/goals/{id}`            | Delete a goal                     |
+| GET    | `/api/insights/`                     | Runway, category breakdown, recurring charges, anomalies, goal risk |
+| GET    | `/api/conversation/history`          | Past chat messages                |
 | POST   | `/api/conversation/text`             | Chat with Zuri (text)             |
 | POST   | `/api/conversation/audio`            | Chat with Zuri (voice)            |
 | PATCH  | `/api/settings/profile`              | Update language / biometric prefs |
-| POST   | `/api/demo/salary-landed`            | Demo webhook: salary credits      |
+| PATCH  | `/api/settings/change-pin`           | Change PIN                        |
+| DELETE | `/api/settings/account`              | Delete account and all data       |
 | POST   | `/api/demo/reset`                    | Reset demo data                   |
 
 Interactive docs: **http://localhost:4000/docs** (Swagger UI).
@@ -211,18 +192,17 @@ Interactive docs: **http://localhost:4000/docs** (Swagger UI).
 ## Security
 
 - 4-digit PIN hashed with **bcrypt** — never logged, never sent to the AI model.
-- **JWT** access tokens; dev mode never enabled in production.
-- Transfers require a **verified PIN** and use an **idempotency key** to prevent double-charges.
-- Money only moves to **saved, bank-verified beneficiaries**.
+- Account password hashed separately from the PIN.
+- **JWT** access tokens; unverified/dev-mode tokens only accepted outside `NODE_ENV=production`.
 - CORS restricted to the frontend origins.
 
 ## Roadmap
 
-- [x] Wire Monnify reserved accounts + webhooks (real rails)
-- [x] Direct-debit mandates on goals
-- [ ] Proactive notifications when salary lands
+- [x] Deterministic spend-intelligence engine (runway, anomalies, recurring charges, goal risk)
+- [x] Full voice loop (live captions → Whisper STT → GPT tool-calling → OpenAI TTS)
+- [x] Persistent conversation history
+- [ ] Proactive notifications when a recurring charge or anomaly is detected
 - [ ] Automated savings rules (round-ups, % of income)
-- [ ] Bills payment (airtime/data/electricity/cable — needs Monnify Bills activation)
 
 ## Contributing
 

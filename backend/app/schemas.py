@@ -31,34 +31,18 @@ class AccountResponse(BaseModel):
     full_name: str
     balance_kobo: int
     balance_display: str
-    account_number: str
-    bank_name: str
 
 
-# --- Beneficiary Schemas ---
-class BeneficiaryCreate(BaseModel):
-    nickname: Optional[str] = None
-    full_name: str
-    account_number: str
-    bank_code: str
+# --- Onboarding Schemas ---
+class RecurringExpenseInput(BaseModel):
+    name: str
+    amount_kobo: int = Field(gt=0)
+    category: str = "bills"
 
-class BeneficiaryResponse(BaseModel):
-    id: int
-    nickname: Optional[str]
-    full_name: str
-    account_number: str
-    bank_code: str
-    send_count: int
-    usual_amount_kobo: int
-
-class BankResolveRequest(BaseModel):
-    account_number: str
-    bank_code: str
-
-class BankResolveResponse(BaseModel):
-    account_number: str
-    account_name: str
-    bank_name: str
+class OnboardingSetupRequest(BaseModel):
+    starting_balance_kobo: int = 0
+    monthly_income_kobo: int = 0
+    recurring_expenses: List[RecurringExpenseInput] = []
 
 
 # --- Goal Schemas ---
@@ -78,15 +62,6 @@ class GoalUpdate(BaseModel):
 class GoalDepositRequest(BaseModel):
     amount_kobo: int
 
-class GoalMandateCreateRequest(BaseModel):
-    account_number: str
-    bank_code: str
-    address: Optional[str] = "Zuri, Nigeria"
-    recurring_amount_kobo: Optional[int] = None
-
-class GoalAutoSaveRequest(BaseModel):
-    amount_kobo: int
-
 class GoalResponse(BaseModel):
     id: int
     name: str
@@ -97,7 +72,7 @@ class GoalResponse(BaseModel):
     status: str
 
 
-# --- Transaction Schemas ---
+# --- Transaction / Ledger Schemas ---
 class TransactionResponse(BaseModel):
     id: int
     monnify_ref: Optional[str]
@@ -111,17 +86,11 @@ class TransactionResponse(BaseModel):
 class TransactionUpdate(BaseModel):
     category: Optional[str] = None
 
-class TransferRequest(BaseModel):
-    category: str = "transfers"
+class LogTransactionRequest(BaseModel):
+    direction: str = Field(pattern=r"^(credit|debit)$")
     amount_kobo: int = Field(gt=0)
-    counterparty_name: str
-    account_number: Optional[str] = None
-    bank_code: Optional[str] = None
-    pin: str
-
-class TransferAuthorizeRequest(BaseModel):
-    reference: str
-    otp: str
+    category: str = "other"
+    note: Optional[str] = None
 
 
 # --- Settings Schemas ---
@@ -138,8 +107,10 @@ class ChangePinRequest(BaseModel):
 # --- Conversation Schemas ---
 class ConversationTextRequest(BaseModel):
     text: str
+    voice: bool = False
 
 class ConversationResponse(BaseModel):
     role: str
     text: str
     timestamp: str
+    audio_base64: Optional[str] = None

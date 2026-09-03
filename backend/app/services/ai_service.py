@@ -4,30 +4,36 @@ from openai import OpenAI
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-SYSTEM_PROMPT = """You are Zuri, an intelligent AI financial assistant for a Nigerian fintech app.
-You help users manage their money, track spending, set goals, send money, and make smart financial decisions.
+SYSTEM_PROMPT = """You are Zuri, a voice-native money diary for Nigeria. You are NOT a bank and
+you never touch a real bank account — Zuri only knows what the user tells it. When someone
+says "I just got paid 200k" or "spent 3k on fuel", you log it; that log is the entire source
+of the numbers you see. Your job is to make that self-reported money "speak out loud": what
+was spent, why it changed, whether they're about to run low, and what to do about it.
 
 Key context:
 - Currency is Nigerian Naira (NGN), amounts are discussed in Naira
-- Users can set savings goals, send money to beneficiaries, track expenses
+- Everything in <user_account> comes from entries the user or onboarding logged — never assume
+  it's synced with a real bank; some early history may be an approximation from onboarding
 - You are friendly, concise, and speak in a mix of English and Nigerian Pidgin when appropriate
 - Keep responses under 200 words unless the user asks for detail
+- Since replies are often read aloud, favour short, spoken-style sentences over lists of numbers
 
-You have real-time access to this user's account inside the <user_account> block.
-Use that data as the single source of truth for anything about their balance, spending,
-transactions, goals, or beneficiaries. Quote real numbers from it. Do not invent figures.
-If the data you need is not present in <user_account>, say you can't see it, and tell them
-where to find it in the app, or which command to use.
+You have real-time access to this user's diary inside the <user_account> block, including a
+"Spending insights" section that is pre-computed (burn rate, runway, category breakdown,
+recurring charges, anomalies, goal risk) — not your own estimate. Always quote those exact
+figures rather than inventing or recalculating them. If something isn't in <user_account>, say
+you can't see it and tell the user where to find it in the app.
 
 You can also TAKE ACTION for the user via the provided tools:
-- send_transfer: send money to a SAVED beneficiary (by nickname or full name). Use the amount
-  the user stated; if they didn't state an amount, use the beneficiary's usual/saved amount.
+- log_transaction: record something the user earned or spent. This is the core interaction —
+  when the user mentions any income or expense in plain language, log it immediately.
 - create_goal: create a savings goal and compute a monthly saving pace.
 
-Be DECISIVE about actions - this is a working app, not a mock. When the user clearly asks to
-send money to a saved beneficiary, call send_transfer immediately and report the result. Do not
-ask for confirmation for a straightforward send; only ask a clarifying question if the recipient
-cannot be identified as a saved beneficiary or the amount is genuinely missing.
+Be DECISIVE about actions - this is a working app, not a mock. When the user states an amount
+they earned or spent, call log_transaction right away and confirm what you logged; only ask a
+clarifying question if the amount is genuinely missing. Otherwise, lean into being a spending
+coach: explain trends, flag anomalies and recurring charges, warn about runway, and suggest
+concrete adjustments.
 <user_account>
 {account_context}
 </user_account>
@@ -37,21 +43,24 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "send_transfer",
-            "description": "Send money from the user's Zuri wallet to a saved beneficiary.",
+            "name": "log_transaction",
+            "description": "Record money the user earned (income) or spent (expense) in their diary.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "beneficiary": {
+                    "direction": {
                         "type": "string",
-                        "description": "Nickname or full name of the saved beneficiary, e.g. 'Mummy'.",
+                        "enum": ["income", "expense"],
+                        "description": "'income' if money came in, 'expense' if money went out.",
                     },
-                    "amount_naira": {
-                        "type": "number",
-                        "description": "Amount in Naira. Omit to use the beneficiary's usual saved amount.",
+                    "amount_naira": {"type": "number", "description": "Amount in Naira."},
+                    "category": {
+                        "type": "string",
+                        "description": "e.g. transport, lifestyle, bills, shopping, income, other.",
                     },
+                    "note": {"type": "string", "description": "Short description, e.g. 'Uber to work' or 'Salary'."},
                 },
-                "required": ["beneficiary"],
+                "required": ["direction", "amount_naira"],
             },
         },
     },
@@ -101,7 +110,7 @@ def build_user_context(user_id: int) -> str:
     cursor = conn.cursor()
 
     cursor.execute(
-        "SELECT balance_kobo, monnify_reserved_account, bank_name FROM accounts WHERE user_id = ?",
+        "SELECT balance_kobo FROM accounts WHERE user_id = ?",
         (user_id,),
     )
     account = cursor.fetchone()
@@ -120,30 +129,22 @@ def build_user_context(user_id: int) -> str:
     )
     goals = cursor.fetchall()
 
-    cursor.execute(
-        "SELECT nickname, full_name, usual_amount_kobo FROM beneficiaries WHERE user_id = ?",
-        (user_id,),
-    )
-    beneficiaries = cursor.fetchall()
-
     conn.close()
 
     lines = []
     if account:
-        lines.append(f"Available balance: {_naira(account['balance_kobo'])}")
-        lines.append(f"Account number: {account['monnify_reserved_account'] or 'n/a'}")
-        lines.append(f"Bank: {account['bank_name'] or 'n/a'}")
+        lines.append(f"Current diary balance: {_naira(account['balance_kobo'])}")
     else:
-        lines.append("Available balance: n/a (no account)")
+        lines.append("Current diary balance: n/a (no account)")
 
     if transactions:
-        lines.append("\nRecent transactions:")
+        lines.append("\nRecent logged entries:")
         for tx in transactions:
             sign = "+" if tx["direction"] == "credit" else "-"
             st = tx["status"] or "completed"
             lines.append(
                 f"- {tx['timestamp'][:10]} {sign}{_naira(tx['amount_kobo'])} "
-                f"{tx['counterparty_name'] or tx['category'] or 'transfer'} ({st})"
+                f"{tx['counterparty_name'] or tx['category'] or 'entry'} ({st})"
             )
 
     if goals:
@@ -154,16 +155,14 @@ def build_user_context(user_id: int) -> str:
                 f"{_naira(g['target_amount_kobo'])} target, recurring {_naira(g['recurring_amount_kobo'])}"
             )
 
-    if beneficiaries:
-        lines.append("\nSaved beneficiaries:")
-        for b in beneficiaries:
-            lines.append(
-                f"- {b['nickname'] or b['full_name']} ({b['full_name']})"
-                f"{f', usual {_naira(b['usual_amount_kobo'])}' if b['usual_amount_kobo'] else ''}"
-            )
-
     if not lines:
         lines.append("No account data on record yet.")
+
+    from .insights_service import compute_insights, summarize_insights_for_ai
+    try:
+        lines.append("\n" + summarize_insights_for_ai(compute_insights(user_id)))
+    except Exception:
+        pass
 
     return "\n".join(lines)
 
@@ -171,100 +170,31 @@ def build_user_context(user_id: int) -> str:
 def execute_tool(name: str, args: dict, user_id: int) -> dict:
     """Execute an AI tool call against the user's real data. Returns a result dict + a
     human-readable confirmation message."""
-    from ..database import get_db
-
-    if name == "send_transfer":
-        beneficiary_key = str(args.get("beneficiary", "")).strip().lower()
-        if not beneficiary_key:
-            return {"ok": False, "message": "No beneficiary provided.", "reply": "Which person should I send money to?"}
-        return _execute_transfer(user_id, beneficiary_key, args.get("amount_naira"))
-    elif name == "create_goal":
+    if name == "log_transaction":
+        return _execute_log_transaction(user_id, args)
+    if name == "create_goal":
         return _execute_create_goal(user_id, args)
     return {"ok": False, "message": f"Unknown tool {name}.", "reply": "I couldn't do that."}
 
 
-def _execute_transfer(user_id: int, beneficiary_key: str, amount_naira):
-    from ..database import get_db
-    from ..services import monnify
+def _execute_log_transaction(user_id: int, args: dict):
+    from .ledger_service import log_entry
 
-    amount_naira = amount_naira or 0
+    direction = "credit" if str(args.get("direction", "")).lower() == "income" else "debit"
+    amount_naira = args.get("amount_naira") or 0
+    category = str(args.get("category") or ("income" if direction == "credit" else "other")).lower()
+    note = args.get("note")
 
-    conn = get_db()
-    conn.execute("BEGIN IMMEDIATE")
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            """SELECT id, nickname, full_name, account_number, bank_code, usual_amount_kobo
-               FROM beneficiaries
-               WHERE user_id = ? AND (LOWER(nickname) = ? OR LOWER(full_name) = ?)""",
-            (user_id, beneficiary_key, beneficiary_key),
-        )
-        ben = cursor.fetchone()
-        if not ben:
-            conn.rollback()
-            return {
-                "ok": False,
-                "reply": f"I couldn't find a saved beneficiary matching '{beneficiary_key}'. "
-                "Add them under Beneficiaries first, then ask me again.",
-            }
+    amount_kobo = int(round(float(amount_naira) * 100))
+    if amount_kobo <= 0:
+        return {"ok": False, "reply": "How much was that? I need an amount to log it."}
 
-        name = ben["nickname"] or ben["full_name"]
-
-        amount_kobo = int(round(float(amount_naira) * 100)) if amount_naira else (ben["usual_amount_kobo"] or 0)
-        if amount_kobo <= 0:
-            conn.rollback()
-            return {
-                "ok": False,
-                "reply": f"How much should I send to {name}? I don't have a usual amount saved for them.",
-            }
-
-        cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
-        account = cursor.fetchone()
-        if not account:
-            conn.rollback()
-            return {"ok": False, "reply": "I couldn't find your account."}
-        if account["balance_kobo"] < amount_kobo:
-            conn.rollback()
-            return {
-                "ok": False,
-                "reply": f"You don't have enough balance to send {_naira(amount_kobo)}. "
-                f"Your balance is {_naira(account['balance_kobo'])}. Tap 'Top up' to add money.",
-            }
-
-        reference = f"MON-AI-{int(datetime.utcnow().timestamp() * 1000)}"
-
-        if monnify.DEMO_MODE:
-            cursor.execute(
-                "UPDATE accounts SET balance_kobo = balance_kobo - ? WHERE user_id = ?",
-                (amount_kobo, user_id),
-            )
-            cursor.execute(
-                """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
-                   VALUES (?, ?, 'debit', ?, ?, 'transfers', 'completed', ?)""",
-                (user_id, reference, amount_kobo, ben["full_name"], datetime.utcnow().isoformat()),
-            )
-        else:
-            cursor.execute(
-                "UPDATE accounts SET balance_kobo = balance_kobo - ? WHERE user_id = ?",
-                (amount_kobo, user_id),
-            )
-            cursor.execute(
-                """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
-                   VALUES (?, ?, 'debit', ?, ?, 'transfers', 'completed', ?)""",
-                (user_id, reference, amount_kobo, ben["full_name"], datetime.utcnow().isoformat()),
-            )
-
-        conn.commit()
-        return {
-            "ok": True,
-            "reply": (
-                f"Done! I sent {_naira(amount_kobo)} to {name} "
-                f"({ben['full_name']}). Your new balance is {_naira(account['balance_kobo'] - amount_kobo)}."
-            ),
-        }
-    except Exception as e:  # noqa: BLE001
-        conn.rollback()
-        return {"ok": False, "reply": f"I couldn't complete that transfer: {str(e)}"}
+    result = log_entry(user_id, direction, amount_kobo, category, note)
+    verb = "Logged income of" if direction == "credit" else "Logged an expense of"
+    return {
+        "ok": True,
+        "reply": f"{verb} {_naira(amount_kobo)}{f' ({note})' if note else ''}. New balance: {result['new_balance_display']}.",
+    }
 
 
 def _execute_create_goal(user_id: int, args: dict):
@@ -368,11 +298,35 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.wav") -> str:
     api_client = get_client()
 
     try:
-        audio_file = (filename, audio_bytes, "audio/wav")
+        audio_file = (filename, audio_bytes, "audio/webm")
         response = api_client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
+            # Biases decoding toward the app's domain (Naira amounts, spending
+            # talk, Nigerian English/Pidgin) without forcing a single language.
+            prompt=(
+                "Nigerian money diary app. The speaker talks about naira amounts, "
+                "income, expenses, savings goals, in English, Pidgin, Yoruba, Igbo or Hausa."
+            ),
+            temperature=0,
         )
-        return response.text
+        return response.text.strip()
     except Exception as e:
         return f"[Transcription error: {str(e)}]"
+
+
+def synthesize_speech(text: str):
+    """Text -> spoken audio bytes (MP3) via OpenAI TTS. Returns None on any failure so
+    callers can fall back to client-side speech synthesis instead of erroring out."""
+    if not text or not text.strip():
+        return None
+    try:
+        api_client = get_client()
+        response = api_client.audio.speech.create(
+            model="tts-1",
+            voice="nova",
+            input=text[:1000],
+        )
+        return response.content
+    except Exception:
+        return None

@@ -1,9 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '../state/AuthContext.jsx';
-import { api, formatNaira } from '../lib/api.js';
-import SendMoneyModal from '../components/SendMoneyModal.jsx';
-import PayBillsModal from '../components/PayBillsModal.jsx';
-import AirtimeDataModal from '../components/AirtimeDataModal.jsx';
+import { api, formatNaira, speakText } from '../lib/api.js';
 
 function getGreeting() {
   const h = new Date().getHours();
@@ -12,82 +9,216 @@ function getGreeting() {
   return 'Good evening';
 }
 
+const CATEGORY_COLORS = ['#131313', '#12A36C', '#4FC3E8', '#C9A227', '#E05B4E', '#9C9A90'];
+const LOG_CATEGORIES = ['transport', 'lifestyle', 'bills', 'shopping', 'other'];
+
 export default function Home() {
   const { user, account, token, refreshAccount } = useAuth();
   const name = (user?.full_name || user?.name || '').split(' ')[0] || 'there';
-  const balance = account?.balance_kobo ?? 29500000;
+  const balance = account?.balance_kobo ?? 0;
   const [hideBalance, setHideBalance] = useState(false);
-  const [topUpBusy, setTopUpBusy] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
+  const [logDirection, setLogDirection] = useState('debit');
+  const [logAmount, setLogAmount] = useState('');
+  const [logCategory, setLogCategory] = useState('other');
+  const [logNote, setLogNote] = useState('');
+  const [logBusy, setLogBusy] = useState(false);
   const [proactiveMessages, setProactiveMessages] = useState([]);
+  const [insights, setInsights] = useState(null);
   const feedRef = useRef(null);
 
-  const [activeModal, setActiveModal] = useState(null);
   const [recording, setRecording] = useState(false);
-  const [voiceResponse, setVoiceResponse] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [liveCaption, setLiveCaption] = useState('');
   const [question, setQuestion] = useState('');
   const [questionBusy, setQuestionBusy] = useState(false);
-  const recognitionRef = useRef(null);
-  const spokenTextRef = useRef('');
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const speechRecognitionRef = useRef(null);
+  const msgIdRef = useRef(0);
+  const questionInputRef = useRef(null);
+
+  function pushMessage(role, text) {
+    const id = ++msgIdRef.current;
+    setMessages((prev) => [...prev, { id, role, text, time: new Date() }]);
+    return id;
+  }
+
+  function updateMessage(id, text) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, text } : m)));
+  }
+
+  useEffect(() => {
+    if (!token) return;
+    api.conversationHistory(token)
+      .then((data) => {
+        const loaded = (data.messages || []).map((m) => ({
+          id: ++msgIdRef.current,
+          role: m.role,
+          text: m.text.startsWith('[Audio] ') ? m.text.slice(8) : m.text,
+          time: new Date(m.timestamp),
+        }));
+        setMessages(loaded);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const loadInsights = useCallback(async () => {
+    if (!token) {
+      setInsights(null);
+      return;
+    }
+    try {
+      const data = await api.insights(token);
+      setInsights(data);
+    } catch {
+      setInsights(null);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    loadInsights();
+  }, [loadInsights]);
 
   useEffect(() => {
     function onProactive(e) {
       setProactiveMessages((prev) => [...prev, e.detail]);
+      loadInsights();
+    }
+    function onRefresh() {
+      loadInsights();
     }
     window.addEventListener('zuri_proactive_message', onProactive);
-    return () => window.removeEventListener('zuri_proactive_message', onProactive);
-  }, []);
+    window.addEventListener('zuri_refresh', onRefresh);
+    return () => {
+      window.removeEventListener('zuri_proactive_message', onProactive);
+      window.removeEventListener('zuri_refresh', onRefresh);
+    };
+  }, [loadInsights]);
+
+  useEffect(() => {
+    if (feedRef.current) {
+      feedRef.current.scrollTop = feedRef.current.scrollHeight;
+    }
+  }, [messages, liveCaption, recording]);
+
+  function playReply(assistantMessage) {
+    if (!assistantMessage) return;
+    speakText(assistantMessage.text, undefined, assistantMessage.audio_base64 || null);
+  }
 
   const submitQuestion = useCallback(async (text) => {
     if (!text || questionBusy || !token) return;
     setQuestionBusy(true);
-    setVoiceResponse({ text, role: 'user' });
+    pushMessage('user', text);
     setQuestion('');
     try {
-      const data = await api.talk(token, text, false);
-      setVoiceResponse(data.assistant_message);
+      const data = await api.talk(token, text, true);
+      pushMessage('assistant', data.assistant_message.text);
+      playReply(data.assistant_message);
+      loadInsights();
     } catch (err) {
-      setVoiceResponse({ text: err.message || 'I could not answer that right now.', role: 'assistant' });
+      pushMessage('assistant', err.message || 'I could not answer that right now.');
     } finally {
       setQuestionBusy(false);
     }
-  }, [questionBusy, token]);
+  }, [questionBusy, token, loadInsights]);
 
-  function toggleRecording() {
-    if (recording) {
-      recognitionRef.current?.stop();
-      return;
+  const sendVoiceClip = useCallback(async (blob) => {
+    if (!token) return;
+    setQuestionBusy(true);
+    const pendingId = pushMessage('user', 'Transcribing…');
+    try {
+      const data = await api.talkAudio(token, blob);
+      updateMessage(pendingId, data.transcription || '(no speech detected)');
+      pushMessage('assistant', data.assistant_message.text);
+      playReply(data.assistant_message);
+      loadInsights();
+    } catch (err) {
+      updateMessage(pendingId, '(could not transcribe)');
+      pushMessage('assistant', err.message || 'I could not hear that clearly. Please try again.');
+    } finally {
+      setQuestionBusy(false);
     }
+  }, [token, loadInsights]);
+
+  function startLiveCaption() {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Recognition) {
-      setVoiceResponse({ text: 'Speech recognition is not supported in this browser.', role: 'assistant' });
+    if (!Recognition) return;
+    try {
+      const recognition = new Recognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-NG';
+      recognition.onresult = (e) => {
+        let transcript = '';
+        for (let i = 0; i < e.results.length; i++) {
+          transcript += e.results[i][0].transcript;
+        }
+        setLiveCaption(transcript.trim());
+      };
+      recognition.onerror = () => {};
+      recognition.start();
+      speechRecognitionRef.current = recognition;
+    } catch {
+      speechRecognitionRef.current = null;
+    }
+  }
+
+  function stopLiveCaption() {
+    try {
+      speechRecognitionRef.current?.stop();
+    } catch {
+      /* no-op */
+    }
+    speechRecognitionRef.current = null;
+    setLiveCaption('');
+  }
+
+  async function toggleRecording() {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
       return;
     }
-    const recognition = new Recognition();
-    spokenTextRef.current = '';
-    recognition.lang = 'en-NG';
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.onstart = () => setRecording(true);
-    recognition.onresult = (event) => {
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) spokenTextRef.current += transcript;
-        else interim += transcript;
-      }
-      setQuestion(`${spokenTextRef.current} ${interim}`.trim());
-    };
-    recognition.onerror = () => {
-      setRecording(false);
-      setVoiceResponse({ text: 'I could not hear that. Please try again.', role: 'assistant' });
-    };
-    recognition.onend = () => {
-      setRecording(false);
-      const text = spokenTextRef.current.trim();
-      if (text) submitQuestion(text);
-    };
-    recognitionRef.current = recognition;
-    recognition.start();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      pushMessage('assistant', 'Voice recording is not supported in this browser.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 48000,
+        },
+      });
+      const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+      const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        audioBitsPerSecond: 128000,
+      });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        stopLiveCaption();
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || 'audio/webm' });
+        if (blob.size > 0) sendVoiceClip(blob);
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(250);
+      setRecording(true);
+      startLiveCaption();
+    } catch {
+      pushMessage('assistant', 'I need microphone access to listen. Please allow it and try again.');
+    }
   }
 
   function askZuri(e) {
@@ -96,18 +227,51 @@ export default function Home() {
     submitQuestion(text);
   }
 
-  async function topUp() {
-    if (topUpBusy || !token) return;
-    setTopUpBusy(true);
+  async function submitLog(e) {
+    e.preventDefault();
+    if (!token) return;
+    const kobo = Math.round(parseFloat(logAmount) * 100);
+    if (!kobo || kobo <= 0) return;
+    setLogBusy(true);
     try {
-      await api.salaryDemo(token);
+      await api.logTransaction(token, {
+        direction: logDirection,
+        amount_kobo: kobo,
+        category: logDirection === 'credit' ? 'income' : logCategory,
+        note: logNote.trim() || undefined,
+      });
       await refreshAccount();
+      loadInsights();
+      setLogOpen(false);
+      setLogAmount('');
+      setLogNote('');
     } catch (err) {
-      setVoiceResponse({ text: err.message || 'Top-up failed. Please try again.', role: 'assistant' });
+      setVoiceResponse({ text: err.message || 'Could not log that. Please try again.', role: 'assistant' });
     } finally {
-      setTopUpBusy(false);
+      setLogBusy(false);
     }
   }
+
+  const alerts = insights ? [
+    ...insights.recurring_charges.slice(0, 2).map((r) => ({
+      type: 'recurring',
+      key: `rec-${r.name}`,
+      label: r.name,
+      detail: `${r.avg_amount_display} roughly every ${r.avg_interval_days} days`,
+    })),
+    ...insights.anomalies.slice(0, 2).map((a) => ({
+      type: 'anomaly',
+      key: `anom-${a.id}`,
+      label: a.counterparty_name || a.category,
+      detail: `${a.amount_display} is well above your usual ${formatNaira(a.category_avg_kobo)} for ${a.category}`,
+    })),
+    ...insights.goals_at_risk.map((g) => ({
+      type: 'goal_risk',
+      key: `goal-${g.goal_id}`,
+      label: g.name,
+      detail: g.message,
+    })),
+  ] : [];
 
   return (
     <>
@@ -155,49 +319,124 @@ export default function Home() {
                 </button>
               </span>
               <span className="balance-amount">{hideBalance ? '••••••' : formatNaira(balance)}</span>
-              <span className="balance-sub">
-                {account?.account_number ? `Account ${account.account_number}` : 'Main account'}
-              </span>
+              <span className="balance-sub">Your money diary — logged, not synced from a bank</span>
               <button
                 className="btn btn-primary balance-topup"
                 type="button"
-                disabled={topUpBusy}
-                onClick={topUp}
+                onClick={() => setLogOpen((o) => !o)}
               >
-                {topUpBusy ? 'Crediting…' : 'Top up ₦350k (demo)'}
+                <PlusIcon /> Log income or expense
               </button>
             </div>
             <div className="balance-icon">
               <WalletIcon />
             </div>
+
+            {logOpen && (
+              <form className="quick-log-panel" onSubmit={submitLog}>
+                <div className="quick-log-segmented">
+                  <button
+                    type="button"
+                    className={`quick-log-seg${logDirection === 'debit' ? ' active' : ''}`}
+                    onClick={() => setLogDirection('debit')}
+                  >
+                    Expense
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-log-seg${logDirection === 'credit' ? ' active' : ''}`}
+                    onClick={() => setLogDirection('credit')}
+                  >
+                    Income
+                  </button>
+                </div>
+                <input
+                  className="quick-log-amount"
+                  value={logAmount}
+                  onChange={(e) => setLogAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+                  placeholder="Amount (₦)"
+                  inputMode="decimal"
+                  autoFocus
+                />
+                {logDirection === 'debit' && (
+                  <select className="quick-log-category" value={logCategory} onChange={(e) => setLogCategory(e.target.value)}>
+                    {LOG_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>{c[0].toUpperCase() + c.slice(1)}</option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  className="quick-log-note"
+                  value={logNote}
+                  onChange={(e) => setLogNote(e.target.value)}
+                  placeholder="Note (optional)"
+                />
+                <div className="quick-log-actions">
+                  <button type="button" className="btn btn-soft" onClick={() => setLogOpen(false)}>Cancel</button>
+                  <button type="submit" className="btn btn-primary" disabled={logBusy || !logAmount}>
+                    {logBusy ? 'Logging…' : 'Log it'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
 
-          {/* Quick Actions */}
-          <div className="dash-card quick-actions">
-            <button className="quick-action" type="button" onClick={() => setActiveModal('send')}>
-              <div className="quick-action-icon">
-                <SendIcon />
-              </div>
-              <span className="quick-action-label">Send money</span>
-            </button>
-            <button className="quick-action" type="button" onClick={() => setActiveModal('bills')}>
-              <div className="quick-action-icon">
-                <BillIcon />
-              </div>
-              <span className="quick-action-label">Pay bills</span>
-            </button>
-            <button className="quick-action" type="button" onClick={() => setActiveModal('airtime')}>
-              <div className="quick-action-icon">
-                <PhoneIcon />
-              </div>
-              <span className="quick-action-label">Airtime &amp; data</span>
-            </button>
-            <button className="quick-action" type="button" onClick={() => setActiveModal('more')}>
-              <div className="quick-action-icon">
-                <MoreIcon />
-              </div>
-              <span className="quick-action-label">More</span>
-            </button>
+          {/* Spend Intelligence */}
+          <div className="dash-card insights-card">
+            <div className="insights-card-header">
+              <span className="insights-card-title">Spend intelligence</span>
+              <span className="insights-card-sub">Computed from your real transactions</span>
+            </div>
+
+            {!insights || (insights.period.this_month_spend_kobo === 0 && insights.category_breakdown.length === 0) ? (
+              <p className="insights-empty">
+                No entries yet — log an expense or income above and Zuri will start tracking your patterns.
+              </p>
+            ) : (
+              <>
+                <div className="insights-grid">
+                  <div className="insight-tile">
+                    <span className="insight-tile-label">Runway</span>
+                    <span className="insight-tile-value">
+                      {insights.burn_rate.runway_days != null ? `${insights.burn_rate.runway_days}d` : '—'}
+                    </span>
+                    <span className="insight-tile-sub">{insights.burn_rate.daily_avg_display}/day burn</span>
+                  </div>
+                  <div className="insight-tile">
+                    <span className="insight-tile-label">This week</span>
+                    <span className="insight-tile-value">{formatNaira(insights.period.this_week_spend_kobo)}</span>
+                    <span className={`insight-trend-badge ${insights.period.week_change_pct > 0 ? 'up' : 'down'}`}>
+                      {insights.period.week_change_pct > 0 ? '▲' : '▼'} {Math.abs(insights.period.week_change_pct)}% vs last week
+                    </span>
+                  </div>
+                  <div className="insight-tile">
+                    <span className="insight-tile-label">This month</span>
+                    <span className="insight-tile-value">{formatNaira(insights.period.this_month_spend_kobo)}</span>
+                    <span className={`insight-trend-badge ${insights.period.month_change_pct > 0 ? 'up' : 'down'}`}>
+                      {insights.period.month_change_pct > 0 ? '▲' : '▼'} {Math.abs(insights.period.month_change_pct)}% vs last month
+                    </span>
+                  </div>
+                </div>
+
+                {insights.category_breakdown.length > 0 && (
+                  <div className="category-bars">
+                    {insights.category_breakdown.slice(0, 5).map((c, i) => (
+                      <div className="category-bar-row" key={c.category}>
+                        <span className="category-bar-dot" style={{ background: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }} />
+                        <span className="category-bar-label">{c.category}</span>
+                        <div className="category-bar-track">
+                          <div
+                            className="category-bar-fill"
+                            style={{ width: `${c.pct}%`, background: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }}
+                          />
+                        </div>
+                        <span className="category-bar-amount">{c.amount_display}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           {/* Conversation */}
@@ -211,84 +450,58 @@ export default function Home() {
             </div>
 
             <div className="conversation-feed" ref={feedRef}>
-              {/* User message */}
-              <div className="conversation-msg user">
-                <span className="conversation-msg-sender user">You</span>
-                <p className="conversation-msg-text">
-                  Zuri, how should I pay my rent this year? It&apos;s &#x20A6;900k due in November.
-                </p>
-                <span className="conversation-msg-time">10:24 AM</span>
-              </div>
-
-              {/* Zuri response */}
-              <div className="conversation-msg zuri">
-                <span className="conversation-msg-sender zuri">Zuri</span>
-                <p className="conversation-msg-text">
-                  I&apos;ve reviewed your income and spending. Here&apos;s the plan I recommend.
-                </p>
-              </div>
-
-              {/* Recommendation */}
-              <div className="recommendation-card">
-                <div className="recommendation-top">
-                  <span className="recommendation-title">Rent 2027</span>
-                  <span className="recommendation-amount">{formatNaira(90000000)} target</span>
-                </div>
-                <span className="recommendation-detail">{formatNaira(7500000)} / month</span>
-                <button className="recommendation-btn" type="button">Set up direct debit</button>
-                <span className="recommendation-note">
-                  Based on your recent income and spending.
-                </span>
-              </div>
-
-              <div className="conversation-msg zuri">
-                <span className="conversation-msg-time">10:26 AM</span>
-              </div>
-
-              {/* Proactive message */}
-              <div className="conversation-msg zuri">
-                <span className="conversation-msg-sender zuri">Zuri</span>
-                <p className="conversation-msg-text">
-                  Your salary just landed — {formatNaira(45000000)}.
-                </p>
-              </div>
-
-              <div className="conversation-msg zuri">
-                <p className="conversation-msg-text">
-                  Here&apos;s what&apos;s already committed.
-                </p>
-
-                <div className="proactive-card">
-                  <span className="proactive-label">
-                    <BoltIcon />
-                    Auto-committed
-                  </span>
-                  <div className="committed-list">
-                    <div className="committed-item">
-                      <span className="committed-item-name">Rent goal</span>
-                      <span className="committed-item-amount">{formatNaira(7500000)}</span>
-                    </div>
-                    <div className="committed-item">
-                      <span className="committed-item-name">Mum&apos;s monthly</span>
-                      <span className="committed-item-amount">{formatNaira(2000000)}</span>
-                    </div>
-                    <div className="committed-item">
-                      <span className="committed-item-name">Tax pot</span>
-                      <span className="committed-item-amount">{formatNaira(4500000)}</span>
-                    </div>
-                  </div>
-                  <div className="committed-summary">
-                    You have {formatNaira(31000000)} available to use.
-                  </div>
-                </div>
-
-                <span className="conversation-msg-time">Just now</span>
-              </div>
-
-              {voiceResponse && (
+              {messages.length === 0 && !recording && (
                 <div className="conversation-msg zuri">
                   <span className="conversation-msg-sender zuri">Zuri</span>
-                  <p className="conversation-msg-text">{voiceResponse.text}</p>
+                  <p className="conversation-msg-text">
+                    Hi{name !== 'there' ? ` ${name}` : ''}! Tell me what you earned or spent, or ask
+                    how your money is looking — I'm listening.
+                  </p>
+                </div>
+              )}
+
+              {messages.map((m) => (
+                <div className={`conversation-msg ${m.role === 'user' ? 'user' : 'zuri'}`} key={m.id}>
+                  <span className={`conversation-msg-sender ${m.role === 'user' ? 'user' : 'zuri'}`}>
+                    {m.role === 'user' ? 'You' : 'Zuri'}
+                  </span>
+                  <p className="conversation-msg-text">{m.text}</p>
+                  <span className="conversation-msg-time">
+                    {m.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              ))}
+
+              {recording && (
+                <div className="conversation-msg user live-caption">
+                  <span className="conversation-msg-sender user">You</span>
+                  <p className="conversation-msg-text">
+                    {liveCaption || <em>Listening…</em>}
+                  </p>
+                </div>
+              )}
+
+              {alerts.length > 0 && (
+                <div className="conversation-msg zuri">
+                  <span className="conversation-msg-sender zuri">Zuri</span>
+                  <p className="conversation-msg-text">
+                    Here&apos;s what I&apos;m noticing in your spending right now.
+                  </p>
+
+                  <div className="proactive-card">
+                    <span className="proactive-label">
+                      <BoltIcon />
+                      Live alerts
+                    </span>
+                    <div className="committed-list">
+                      {alerts.map((a) => (
+                        <div className="committed-item" key={a.key}>
+                          <span className="committed-item-name">{a.label}</span>
+                          <span className="committed-item-amount alert-detail">{a.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -301,6 +514,7 @@ export default function Home() {
       <form className="ask-zuri-bar" onSubmit={askZuri}>
         <KeyboardIcon />
         <input
+          ref={questionInputRef}
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Ask Zuri about your spending"
@@ -314,7 +528,12 @@ export default function Home() {
 
       {/* Voice Bar */}
       <div className="voice-bar">
-        <button className="voice-icon-btn" type="button" aria-label="Type a message">
+        <button
+          className="voice-icon-btn"
+          type="button"
+          aria-label="Type a message"
+          onClick={() => questionInputRef.current?.focus()}
+        >
           <KeyboardIcon />
         </button>
 
@@ -329,6 +548,7 @@ export default function Home() {
             type="button"
             aria-label={recording ? 'Stop recording' : 'Tap to speak'}
             onClick={toggleRecording}
+            disabled={questionBusy && !recording}
           >
             <div className="voice-mic-ring-outer" />
             <div className="voice-mic-ring" />
@@ -336,113 +556,37 @@ export default function Home() {
           </button>
         </div>
 
-        <span className="voice-label">{recording ? 'Recording…' : 'Tap to speak'}</span>
+        <span className="voice-label">{recording ? 'Listening…' : questionBusy ? 'Thinking…' : 'Tap to speak'}</span>
 
-        <button className="voice-icon-btn" type="button" aria-label="Conversation history">
+        <button
+          className="voice-icon-btn"
+          type="button"
+          aria-label="Conversation history"
+          onClick={() => feedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+        >
           <ChatIcon />
         </button>
       </div>
-
-      {activeModal === 'send' && <SendMoneyModal onClose={() => setActiveModal(null)} />}
-      {activeModal === 'bills' && <PayBillsModal onClose={() => setActiveModal(null)} />}
-      {activeModal === 'airtime' && <AirtimeDataModal onClose={() => setActiveModal(null)} />}
-      {activeModal === 'more' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
-          <div className="modal services-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="services-modal-header">
-              <div>
-                <h2>More services</h2>
-                <p className="lede">Everyday money and lifestyle essentials.</p>
-              </div>
-              <button type="button" className="icon-btn" onClick={() => setActiveModal(null)} aria-label="Close services">×</button>
-            </div>
-            <div className="services-grid">
-              <button type="button" className="service-option" onClick={() => { setActiveModal(null); setVoiceResponse({ text: 'Sports betting funding is ready to be connected.', role: 'assistant' }); }}>
-                <span className="service-option-icon"><TrophyIcon /></span>
-                <span><strong>Sports betting</strong><small>Fund your wallet</small></span>
-              </button>
-              <button type="button" className="service-option" onClick={() => { setActiveModal(null); setVoiceResponse({ text: 'Gift cards will be available here soon.', role: 'assistant' }); }}>
-                <span className="service-option-icon"><GiftIcon /></span>
-                <span><strong>Gift cards</strong><small>Buy a digital card</small></span>
-              </button>
-              <button type="button" className="service-option" onClick={() => setActiveModal('bills')}>
-                <span className="service-option-icon"><BillIcon /></span>
-                <span><strong>Cable TV</strong><small>Pay a subscription</small></span>
-              </button>
-              <button type="button" className="service-option" onClick={() => setActiveModal('bills')}>
-                <span className="service-option-icon"><BoltIcon /></span>
-                <span><strong>Electricity</strong><small>Pay a bill</small></span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
 
 /* ——— Icons ——— */
 
+function PlusIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
 function WalletIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="M22 10H18a2 2 0 0 0 0 4h4" />
-    </svg>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  );
-}
-
-function BillIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <line x1="16" y1="13" x2="8" y2="13" />
-      <line x1="16" y1="17" x2="8" y2="17" />
-    </svg>
-  );
-}
-
-function PhoneIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
-      <line x1="12" y1="18" x2="12.01" y2="18" />
-    </svg>
-  );
-}
-
-function MoreIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="1" />
-      <circle cx="19" cy="12" r="1" />
-      <circle cx="5" cy="12" r="1" />
-    </svg>
-  );
-}
-
-function TrophyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4zM7 6H3v2a4 4 0 0 0 4 4M17 6h4v2a4 4 0 0 1-4 4" />
-    </svg>
-  );
-}
-
-function GiftIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="8" width="18" height="13" rx="2" /><path d="M12 8v13M3 12h18M12 8H8.5a2.5 2.5 0 1 1 2.5-2.5V8zM12 8h3.5a2.5 2.5 0 1 0-2.5-2.5V8z" />
     </svg>
   );
 }

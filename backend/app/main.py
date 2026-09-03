@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .database import init_db
-from .routers import auth, account, goals, beneficiaries, transactions, settings, conversation, webhooks
+from .routers import auth, account, goals, transactions, settings, conversation, insights, onboarding
 
 
 @asynccontextmanager
@@ -39,11 +39,11 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(account.router)
 app.include_router(goals.router)
-app.include_router(beneficiaries.router)
 app.include_router(transactions.router)
 app.include_router(settings.router)
 app.include_router(conversation.router)
-app.include_router(webhooks.router)
+app.include_router(insights.router)
+app.include_router(onboarding.router)
 
 
 @app.get("/")

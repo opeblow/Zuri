@@ -1,8 +1,4 @@
 import asyncio
-import json
-import os
-import urllib.request
-import urllib.error
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -13,15 +9,13 @@ from ..database import get_db
 from ..schemas import AccountResponse
 from .auth import get_current_user
 from ..services.auth_service import decode_token
-from ..banks import get_all_banks
-router = APIRouter(prefix="/api", tags=["account"])
 
-PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY", "")
+router = APIRouter(prefix="/api", tags=["account"])
 
 
 def format_naira(kobo: int) -> str:
     naira = kobo / 100
-    return f"â‚¦{naira:,.2f}"
+    return f"₦{naira:,.2f}"
 
 
 @router.get("/account", response_model=AccountResponse)
@@ -47,37 +41,7 @@ def get_account(user_id: int = Depends(get_current_user)):
         full_name=user["full_name"],
         balance_kobo=account["balance_kobo"],
         balance_display=format_naira(account["balance_kobo"]),
-        account_number=account["monnify_reserved_account"],
-        bank_name=account["bank_name"],
     )
-
-
-@router.post("/demo/salary-landed")
-def salary_landed(user_id: int = Depends(get_current_user)):
-    salary_kobo = 35000000
-
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("UPDATE accounts SET balance_kobo = balance_kobo + ? WHERE user_id = ?", (salary_kobo, user_id))
-
-    cursor.execute(
-        """INSERT INTO transactions (user_id, monnify_ref, direction, amount_kobo, counterparty_name, category, status, timestamp)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, f"MON-SAL-{int(datetime.utcnow().timestamp())}", "credit", salary_kobo, "TechCorp Ltd", "income", "completed", datetime.utcnow().isoformat()),
-    )
-
-    cursor.execute("SELECT balance_kobo FROM accounts WHERE user_id = ?", (user_id,))
-    account = cursor.fetchone()
-    conn.commit()
-    conn.close()
-
-    return {
-        "message": "Salary credited successfully",
-        "amount_kobo": salary_kobo,
-        "new_balance_kobo": account["balance_kobo"],
-        "new_balance_display": format_naira(account["balance_kobo"]),
-    }
 
 
 @router.post("/demo/reset")
@@ -89,7 +53,6 @@ def reset_demo(user_id: int = Depends(get_current_user)):
     cursor.execute("DELETE FROM automations WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM transactions WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM goals WHERE user_id = ?", (user_id,))
-    cursor.execute("DELETE FROM beneficiaries WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM accounts WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
@@ -97,11 +60,6 @@ def reset_demo(user_id: int = Depends(get_current_user)):
     conn.close()
 
     return {"message": "Demo data reset successfully"}
-
-
-@router.get("/banks")
-def list_all_banks():
-    return {"banks": get_all_banks()}
 
 
 @router.get("/events/stream")

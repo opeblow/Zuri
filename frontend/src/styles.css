@@ -54,10 +54,6 @@ a {
   position: relative;
 }
 
-.app-frame:has(.onboarding-screen) {
-  background: #ffffff;
-}
-
 .phone-glow {
   position: fixed;
   inset: auto;
@@ -288,13 +284,13 @@ a {
 }
 
 .btn-primary {
-  background: var(--glow);
+  background: #131313;
   color: #FFFFFF;
-  box-shadow: 0 4px 14px rgba(124, 58, 237, 0.3);
+  box-shadow: 0 4px 14px rgba(19, 19, 19, 0.18);
 }
 
 .btn-primary:hover {
-  background: var(--glow-dim);
+  background: #000000;
 }
 
 .btn-ghost {
@@ -304,13 +300,13 @@ a {
 }
 
 .btn-ink {
-  background: var(--ink);
+  background: #131313;
   color: #FFFFFF;
 }
 
 .btn-soft {
-  background: rgba(124, 58, 237, 0.08);
-  color: var(--ink-2);
+  background: #F5F4F0;
+  color: #131313;
 }
 
 .btn:disabled {
@@ -1021,5 +1017,25 @@ a {
     height: 100dvh;
     min-height: 100dvh;
     border-radius: 0;
+  }
+}
+
+/* ——— Shared scroll/mount reveal utility ——— */
+.reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    transition: none;
+    opacity: 1;
+    transform: none;
   }
 }

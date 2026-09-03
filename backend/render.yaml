@@ -11,8 +11,5 @@ services:
         value: 8000
       - key: JWT_SECRET
         generateValue: true
-      - key: MONNIFY_BASE_URL
-        value: "https://sandbox.monnify.com"
       # Set these in the Render dashboard (never hardcode secrets):
-      # MONNIFY_API_KEY, MONNIFY_SECRET_KEY, MONNIFY_CONTRACT_CODE,
-      # MONNIFY_WALLET_ACCOUNT_NUMBER, OPENAI_API_KEY
+      # OPENAI_API_KEY, ALLOWED_ORIGINS

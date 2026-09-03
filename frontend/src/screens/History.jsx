@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../state/AuthContext.jsx';
 import { api, formatNaira } from '../lib/api.js';
 
-const FILTERS = ['All', 'Income', 'Transfers', 'Bills', 'Lifestyle', 'Shopping'];
+const FILTERS = ['All', 'Income', 'Bills', 'Transport', 'Lifestyle', 'Shopping', 'Savings', 'Other'];
 
 function groupByDate(txs) {
   const groups = [];
@@ -37,19 +38,16 @@ function formatTime(iso) {
   return new Date(iso).toLocaleTimeString('en-NG', { hour: 'numeric', minute: '2-digit', hour12: true });
 }
 
-function maskName(name) {
-  return name;
-}
-
 function normalizeTransaction(tx) {
   const category = String(tx.category || '').toLowerCase();
   return {
     ...tx,
     category: category === 'income' || tx.direction === 'credit' ? 'Income'
-      : category === 'transfers' || category === 'family' ? 'Transfers'
       : category === 'bills' ? 'Bills'
-      : category === 'lifestyle' || category === 'entertainment' || category === 'transport' ? 'Lifestyle'
-      : category === 'shopping' ? 'Shopping' : tx.category || 'Other',
+      : category === 'transport' ? 'Transport'
+      : category === 'lifestyle' || category === 'entertainment' ? 'Lifestyle'
+      : category === 'shopping' ? 'Shopping'
+      : category === 'savings' ? 'Savings' : tx.category || 'Other',
     direction: tx.direction === 'credit' || tx.direction === 'inbound' ? 'inbound' : 'outbound',
     occurred_at: tx.occurred_at || tx.timestamp,
     narration: tx.narration || tx.category || 'Transaction',
@@ -101,11 +99,7 @@ export default function History() {
   const filtered = rows.filter((tx) => {
     if (activeFilter === 'All') return true;
     if (activeFilter === 'Income') return tx.direction === 'inbound';
-    if (activeFilter === 'Transfers') return tx.category === 'Transfers';
-    if (activeFilter === 'Bills') return tx.category === 'Bills';
-    if (activeFilter === 'Lifestyle') return tx.category === 'Lifestyle';
-    if (activeFilter === 'Shopping') return tx.category === 'Shopping';
-    return true;
+    return tx.category === activeFilter;
   });
 
   const groups = groupByDate(filtered);
@@ -115,19 +109,28 @@ export default function History() {
     setRecatOpen(false);
   }
 
+  async function recategorize(tx, displayCategory) {
+    setRecatOpen(false);
+    const category = displayCategory.toLowerCase();
+    try {
+      await api.recategorizeTransaction(token, tx.id, category);
+      const updated = normalizeTransaction({ ...tx, category });
+      setRows((prev) => prev.map((r) => (r.id === tx.id ? updated : r)));
+      setSelectedTx(updated);
+    } catch {
+      /* leave the transaction as-is if the update fails */
+    }
+  }
+
   const CatIcon = selectedTx ? CATEGORY_ICONS[selectedTx.category] || CategoryIcon : CategoryIcon;
 
   return (
     <div className="transactions-page">
       <div className="transactions-header">
         <div className="transactions-header-left">
-          <h1 className="transactions-title">Transactions</h1>
-          <p className="transactions-subtitle">Your latest activity.</p>
+          <h1 className="transactions-title">Money Diary</h1>
+          <p className="transactions-subtitle">Everything you've told Zuri, in order.</p>
         </div>
-        <button className="transactions-filter-btn">
-          <FilterIcon />
-          Filters
-        </button>
       </div>
 
       <div className="transactions-filters">
@@ -171,7 +174,7 @@ export default function History() {
                   </div>
 
                   <div className="transactions-row-info">
-                    <div className="transactions-row-name">{maskName(tx.counterparty_name)}</div>
+                    <div className="transactions-row-name">{tx.counterparty_name}</div>
                     <div className="transactions-row-meta">
                       <span className="transactions-row-narration">{tx.narration}</span>
                       <span className="transactions-row-dot">·</span>
@@ -237,11 +240,11 @@ export default function History() {
                 </div>
                 {recatOpen ? (
                   <div className="transactions-detail-recat-options">
-                    {['Income', 'Transport', 'Family', 'Entertainment', 'Shopping', 'Bills', 'Lifestyle'].map((c) => (
+                    {['Income', 'Bills', 'Transport', 'Lifestyle', 'Shopping', 'Savings', 'Other'].map((c) => (
                       <button
                         key={c}
                         className={`transactions-detail-recat-option${selectedTx.category === c ? ' active' : ''}`}
-                        onClick={() => { setRecatOpen(false); }}
+                        onClick={() => recategorize(selectedTx, c)}
                       >
                         {c}
                       </button>
@@ -263,7 +266,7 @@ export default function History() {
         )}
       </div>
 
-      <div className="transactions-cta">
+      <Link to="/dashboard" className="transactions-cta">
         <div className="transactions-cta-content">
           <div className="transactions-cta-icon">
             <MicIcon />
@@ -273,23 +276,24 @@ export default function History() {
             <p className="transactions-cta-desc">"How much did I spend on transport this month?"</p>
           </div>
         </div>
-        <button className="transactions-cta-mic" aria-label="Ask Zuri">
+        <span className="transactions-cta-mic" aria-label="Ask Zuri">
           <MicIcon />
-        </button>
-      </div>
+        </span>
+      </Link>
     </div>
   );
 }
 
 function TxCategoryIcon({ category }) {
   const icons = {
-    Income: { bg: 'var(--dash-accent-light)', color: 'var(--dash-accent)', Icon: IncomeIcon },
-    Transport: { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: TransportIcon },
-    Family: { bg: 'var(--dash-accent-light)', color: 'var(--dash-accent)', Icon: FamilyIcon },
-    Entertainment: { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: EntertainmentIcon },
-    Shopping: { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: ShoppingIcon },
-    Bills: { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: BillsIcon },
-    Lifestyle: { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: LifestyleIcon },
+    Income: { bg: '#12A36C', color: '#FFFFFF', Icon: IncomeIcon },
+    Transport: { bg: '#4FC3E8', color: '#131313', Icon: TransportIcon },
+    Family: { bg: '#E05B4E', color: '#FFFFFF', Icon: FamilyIcon },
+    Entertainment: { bg: '#131313', color: '#FFFFFF', Icon: EntertainmentIcon },
+    Shopping: { bg: '#131313', color: '#FFFFFF', Icon: ShoppingIcon },
+    Bills: { bg: '#131313', color: '#FFFFFF', Icon: BillsIcon },
+    Lifestyle: { bg: '#E05B4E', color: '#FFFFFF', Icon: LifestyleIcon },
+    Savings: { bg: '#F3F06F', color: '#131313', Icon: CategoryIcon },
   };
   const { bg, color, Icon } = icons[category] || { bg: 'var(--dash-bg)', color: 'var(--dash-text-secondary)', Icon: CategoryIcon };
   return (
@@ -299,28 +303,11 @@ function TxCategoryIcon({ category }) {
   );
 }
 
-function PlusIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
-
 function CloseIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
       <line x1="18" y1="6" x2="6" y2="18" />
       <line x1="6" y1="6" x2="18" y2="18" />
-    </svg>
-  );
-}
-
-function FilterIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
     </svg>
   );
 }

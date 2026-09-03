@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useAuth } from '../state/AuthContext.jsx';
 import { api, getLanguageLabel } from '../lib/api.js';
 import { useNavigate } from 'react-router-dom';
@@ -11,8 +12,10 @@ const LANGUAGES = [
 ];
 
 export default function Settings() {
-  const { user, account, logout, token, setUser } = useAuth();
+  const { user, logout, token, setUser } = useAuth();
   const navigate = useNavigate();
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState('');
 
   async function selectLanguage(langId) {
     setUser({ ...user, language_pref: langId });
@@ -28,17 +31,29 @@ export default function Settings() {
     navigate('/');
   }
 
+  async function handleResetDemo() {
+    if (resetBusy || !token) return;
+    setResetBusy(true);
+    setResetError('');
+    try {
+      await api.resetDemo(token);
+      logout();
+      navigate('/');
+    } catch (err) {
+      setResetError(err.message || 'Could not reset demo data.');
+      setResetBusy(false);
+    }
+  }
+
   const name = user?.full_name || 'Account';
   const phone = user?.phone || '';
   const initial = name.charAt(0).toUpperCase();
-  const accountNumber = account?.account_number || account?.reserved_account || '—';
-  const bankName = 'Zuri';
 
   return (
     <div className="settings-page">
       <div className="settings-header">
         <h1 className="settings-title">Settings</h1>
-        <p className="settings-subtitle">Language, limits, and account basics.</p>
+        <p className="settings-subtitle">Language and account basics.</p>
       </div>
 
       <div className="settings-content">
@@ -58,18 +73,6 @@ export default function Settings() {
               <span className="settings-detail-label">Full name</span>
               <span className="settings-detail-value">{name}</span>
             </div>
-            {accountNumber && accountNumber !== '—' && (
-              <div className="settings-detail-row">
-                <span className="settings-detail-label">Account number</span>
-                <span className="settings-detail-value settings-detail-mono">{accountNumber}</span>
-              </div>
-            )}
-            {bankName && (
-              <div className="settings-detail-row">
-                <span className="settings-detail-label">Bank</span>
-                <span className="settings-detail-value">{bankName}</span>
-              </div>
-            )}
             <div className="settings-detail-row">
               <span className="settings-detail-label">Security PIN</span>
               <span className="settings-detail-value">••••</span>
@@ -98,20 +101,15 @@ export default function Settings() {
 
         <div className="settings-card">
           <div className="settings-card-header">
-            <h2 className="settings-card-title">Security</h2>
+            <h2 className="settings-card-title">Demo</h2>
           </div>
-          <div className="settings-detail-rows">
-            <div className="settings-detail-row">
-              <span className="settings-detail-label">Biometric daily limit</span>
-              <span className="settings-detail-value">
-                ₦{((user?.daily_biometric_limit_kobo || 2_000_000) / 100).toLocaleString()}
-              </span>
-            </div>
-            <div className="settings-detail-row">
-              <span className="settings-detail-label">PIN required above</span>
-              <span className="settings-detail-value">Larger sends</span>
-            </div>
-          </div>
+          <p className="settings-detail-label" style={{ marginBottom: 10 }}>
+            Wipe every logged entry, goal, and this account, and start fresh.
+          </p>
+          {resetError && <p className="error">{resetError}</p>}
+          <button type="button" className="settings-logout-btn" onClick={handleResetDemo} disabled={resetBusy}>
+            {resetBusy ? 'Resetting…' : 'Reset demo data'}
+          </button>
         </div>
 
         <button type="button" className="settings-logout-btn" onClick={handleLogout}>

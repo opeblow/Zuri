@@ -217,7 +217,7 @@ export default function Goals() {
           <GoalDetailPanel
             goal={selectedGoal}
             onClose={() => setSelectedGoal(null)}
-            onPauseDebit={() => {
+            onPauseGoal={() => {
               if (token) {
                 requirePin((pin) => api.patchGoal(token, selectedGoal.id, { status: 'paused', pin }));
               }
@@ -291,7 +291,7 @@ export default function Goals() {
                 <input placeholder="YYYY-MM-DD" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
               </div>
               <div className="field">
-                <label>Monthly Auto-Debit (\u20a6) [Optional]</label>
+                <label>Monthly saving target (\u20a6) [Optional]</label>
                 <input type="number" placeholder="0" value={recurringInput} onChange={(e) => setRecurringInput(e.target.value)} />
               </div>
               <div className="row-split" style={{ marginTop: 10 }}>
@@ -325,7 +325,7 @@ export default function Goals() {
               )}
               {manageGoal.mode === 'auto-debit' && (
                 <div className="field">
-                  <label>New Monthly Auto-Debit (\u20a6)</label>
+                  <label>New monthly saving target (\u20a6)</label>
                   <input type="number" placeholder="0" value={recurringInput} onChange={(e) => setRecurringInput(e.target.value)} />
                 </div>
               )}
@@ -363,7 +363,7 @@ export default function Goals() {
 
 function GoalCard({ goal, isSelected, isPrimary, onSelect, onManage }) {
   const g = goal;
-  const hasDebit = g.direct_debit || g.recurring_amount_kobo > 0;
+  const hasTarget = g.recurring_amount_kobo > 0;
 
   return (
     <div
@@ -398,13 +398,13 @@ function GoalCard({ goal, isSelected, isPrimary, onSelect, onManage }) {
 
       <div className="goal-card-bottom">
         <div className="goal-card-meta">
-          {hasDebit && (
+          {hasTarget && (
             <span className="goal-card-recurring">{g.recurring_display} / month</span>
           )}
-          {hasDebit && (
+          {hasTarget && (
             <span className="goal-card-debit-status">
               <span className="goal-card-debit-dot" />
-              Direct debit active
+              Saving target set
             </span>
           )}
         </div>
@@ -419,9 +419,9 @@ function GoalCard({ goal, isSelected, isPrimary, onSelect, onManage }) {
   );
 }
 
-function GoalDetailPanel({ goal, onClose, onPauseDebit }) {
+function GoalDetailPanel({ goal, onClose, onPauseGoal }) {
   const g = goal;
-  const hasDebit = g.direct_debit || g.recurring_amount_kobo > 0;
+  const hasTarget = g.recurring_amount_kobo > 0;
   const targetDate = g.target_date ? new Date(g.target_date).toLocaleDateString('en-NG', { month: 'long', year: 'numeric' }) : 'Not set';
 
   return (
@@ -448,7 +448,7 @@ function GoalDetailPanel({ goal, onClose, onPauseDebit }) {
         </div>
         <div className="goal-detail-row">
           <span className="goal-detail-label">Funding method</span>
-          <span className="goal-detail-value">{hasDebit ? 'Direct Debit' : 'Manual'}</span>
+          <span className="goal-detail-value">{hasTarget ? 'Self-logged, on a monthly pace' : 'Manual'}</span>
         </div>
         <div className="goal-detail-row">
           <span className="goal-detail-label">Status</span>
@@ -457,19 +457,6 @@ function GoalDetailPanel({ goal, onClose, onPauseDebit }) {
             Active
           </span>
         </div>
-
-        {hasDebit && (
-          <div className="goal-detail-monnify">
-            <div className="goal-detail-monnify-header">
-              <MonnifyIcon />
-              <span>Monnify Direct Debit</span>
-            </div>
-            <div className="goal-detail-monnify-status">
-              <span className="goal-detail-monnify-dot" />
-              Mandate active
-            </div>
-          </div>
-        )}
 
         <div className="goal-detail-progress-section">
           <div className="goal-detail-progress-header">
@@ -491,10 +478,10 @@ function GoalDetailPanel({ goal, onClose, onPauseDebit }) {
         </div>
       </div>
 
-      {hasDebit && (
+      {hasTarget && (
         <div className="goal-detail-footer">
-          <button className="goal-detail-pause-btn" onClick={onPauseDebit}>
-            Pause direct debit
+          <button className="goal-detail-pause-btn" onClick={onPauseGoal}>
+            Pause this goal
           </button>
         </div>
       )}
@@ -538,11 +525,3 @@ function ZuriSparkIcon() {
   );
 }
 
-function MonnifyIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="4" width="20" height="16" rx="2" />
-      <line x1="2" y1="10" x2="22" y2="10" />
-    </svg>
-  );
-}
