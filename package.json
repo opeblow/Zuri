@@ -1,7 +1,7 @@
 {
   "name": "zuri",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Zuri — conversational money app (APIConf Hackathon)",
   "scripts": {
     "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
