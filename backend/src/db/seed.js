@@ -1,22 +1,27 @@
-import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import {
   createAccount,
   createUser,
-  getDb,
+  findUserByPhone,
   pushConversation,
-  resetDb,
   upsertTransaction,
+  insertBeneficiary,
+  insertGoal,
+  insertAutomation,
 } from './store.js';
+import { createReservedAccount } from '../services/monnify.js';
 import { logger } from '../lib/logger.js';
 
 /**
  * Seeds a realistic 3-month history for demo Moments 1–3.
  * Demo login: phone 08012345678 / PIN 1234
  */
-export function seedDemoAccount() {
-  resetDb();
-  const db = getDb();
+export async function seedDemoAccount() {
+  const existing = findUserByPhone('08012345678');
+  if (existing) {
+    logger.info({ phone: existing.phone }, 'Demo account already exists in SQLite (PIN 1234)');
+    return { user: existing };
+  }
 
   const user = createUser({
     phone: '08012345678',
@@ -25,12 +30,20 @@ export function seedDemoAccount() {
     language_pref: 'en',
     pin: '1234',
   });
-  user.biometric_enabled = true;
+  
+  // Actually provision from Monnify if DEMO_MODE=false
+  const accountRef = `ZURI-${user.id.replace(/-/g, '').slice(0, 12)}`;
+  const reserved = await createReservedAccount({
+    accountReference: accountRef,
+    accountName: `Zuri/Amina Okonkwo`,
+    customerEmail: user.email,
+    customerName: user.full_name,
+  });
 
   createAccount(user.id, {
-    monnify_reserved_account: '7801234567',
-    monnify_account_ref: `ZURI-${user.id.slice(0, 8)}`,
-    bank_name: 'Moniepoint MFB',
+    monnify_reserved_account: reserved.accountNumber,
+    monnify_account_ref: reserved.accountReference,
+    bank_name: reserved.bankName,
     balance_kobo: 29_500_000, // ₦295,000
   });
 
@@ -44,6 +57,7 @@ export function seedDemoAccount() {
     bank_name: 'GTBank',
     last_sent_at: '2026-07-05T10:00:00.000Z',
     send_count: 8,
+    usual_amount_kobo: 5_000_000,
     created_at: '2026-04-01T10:00:00.000Z',
   };
   const ada = {
@@ -56,9 +70,11 @@ export function seedDemoAccount() {
     bank_name: 'UBA',
     last_sent_at: '2026-06-30T14:00:00.000Z',
     send_count: 3,
+    usual_amount_kobo: 1_500_000,
     created_at: '2026-05-10T10:00:00.000Z',
   };
-  db.beneficiaries.push(mummy, ada);
+  insertBeneficiary(mummy);
+  insertBeneficiary(ada);
 
   const rentGoal = {
     id: randomUUID(),
@@ -68,8 +84,8 @@ export function seedDemoAccount() {
     target_date: '2026-11-01',
     current_amount_kobo: 12_000_000,
     recurring_amount_kobo: 9_000_000,
-    monnify_mandate_ref: null,
     status: 'active',
+    monnify_mandate_ref: null,
     created_at: '2026-05-01T10:00:00.000Z',
   };
   const taxPot = {
@@ -80,15 +96,17 @@ export function seedDemoAccount() {
     target_date: '2027-03-31',
     current_amount_kobo: 8_500_000,
     recurring_amount_kobo: 4_000_000,
-    monnify_mandate_ref: null,
     status: 'active',
+    monnify_mandate_ref: null,
     created_at: '2026-04-15T10:00:00.000Z',
   };
-  db.goals.push(rentGoal, taxPot);
+  insertGoal(rentGoal);
+  insertGoal(taxPot);
 
-  db.automations.push({
+  insertAutomation({
     id: randomUUID(),
     user_id: user.id,
+    name: 'Rent Skim',
     trigger_type: 'inbound_credit',
     trigger_config: { source_contains: 'Design Corp' },
     action_type: 'skim_to_goal',
@@ -139,7 +157,7 @@ export function seedDemoAccount() {
     intent: 'greeting',
   });
 
-  logger.info({ phone: user.phone }, 'Demo account seeded (PIN 1234)');
+  logger.info({ phone: user.phone }, 'Demo account seeded in SQLite (PIN 1234)');
   return { user, rentGoal, mummy };
 }
 

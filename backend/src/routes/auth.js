@@ -30,7 +30,7 @@ router.post('/signup', async (req, res) => {
     const accountRef = `ZURI-${user.id.replace(/-/g, '').slice(0, 12)}`;
     const reserved = await createReservedAccount({
       accountReference: accountRef,
-      accountName: `Zuri/${body.full_name}`,
+      accountName: `${body.full_name}`,
       customerEmail: body.email,
       customerName: body.full_name,
     });

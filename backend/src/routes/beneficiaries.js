@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { getDb, listBeneficiaries } from '../db/store.js';
+import { getDb, listBeneficiaries, insertBeneficiary, deleteBeneficiary } from '../db/store.js';
 import { authRequired } from '../middleware/auth.js';
 import { NIGERIAN_BANKS, verifyBankAccount } from '../services/monnify.js';
 
@@ -9,6 +9,34 @@ const router = Router();
 
 router.get('/banks', (_req, res) => {
   res.json({ banks: NIGERIAN_BANKS });
+});
+
+/**
+ * Resolve an account number + bank to the holder's name.
+ * Does NOT save anything — purely a lookup.
+ */
+router.post('/resolve', authRequired, async (req, res) => {
+  try {
+    const schema = z.object({
+      account_number: z.string().length(10),
+      bank_code: z.string().min(3),
+    });
+    const body = schema.parse(req.body);
+    const verified = await verifyBankAccount({
+      accountNumber: body.account_number,
+      bankCode: body.bank_code,
+    });
+    const bank = NIGERIAN_BANKS.find((b) => b.code === body.bank_code);
+    res.json({
+      account_name: verified.accountName,
+      account_number: body.account_number,
+      bank_code: body.bank_code,
+      bank_name: bank?.name || 'Bank',
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/', authRequired, (req, res) => {
@@ -39,9 +67,10 @@ router.post('/', authRequired, async (req, res) => {
       bank_name: bank?.name || 'Bank',
       last_sent_at: null,
       send_count: 0,
+      usual_amount_kobo: 0,
       created_at: new Date().toISOString(),
     };
-    getDb().beneficiaries.push(row);
+    insertBeneficiary(row);
     res.status(201).json({
       beneficiary: row,
       verification: { accountName: verified.accountName, confirmed: true },
@@ -53,12 +82,9 @@ router.post('/', authRequired, async (req, res) => {
 });
 
 router.delete('/:id', authRequired, (req, res) => {
-  const db = getDb();
-  const idx = db.beneficiaries.findIndex(
-    (b) => b.id === req.params.id && b.user_id === req.user.id,
-  );
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  db.beneficiaries.splice(idx, 1);
+  if (!deleteBeneficiary(req.user.id, req.params.id)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   res.json({ ok: true });
 });
 

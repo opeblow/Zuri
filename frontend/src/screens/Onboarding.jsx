@@ -87,7 +87,7 @@ export default function Onboarding() {
         {step === 1 && mode === 'signup' && (
           <>
             <h1 style={{ marginTop: 18 }}>Who are you?</h1>
-            <p className="lede">We'll provision a Monnify reserved account behind the scenes.</p>
+            <p className="lede">We'll provide a Monnify reserved account behind the scenes.</p>
             <div className="field">
               <label>Full name</label>
               <input value={form.full_name} onChange={(e) => set('full_name', e.target.value)} placeholder="Amina Okonkwo" />

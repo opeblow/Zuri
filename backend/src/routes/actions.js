@@ -7,14 +7,21 @@ import {
   deleteAutomation,
   deleteGoal,
   getAccountForUser,
+  getAccountByReservedNumber,
   getDb,
+  getGoalById,
+  insertGoal,
+  updateGoal,
+  insertAutomation,
   listAutomations,
   listBeneficiaries,
   upsertTransaction,
+  pushConversation,
 } from '../db/store.js';
 import { authRequired, verifyPin } from '../middleware/auth.js';
-import { createDirectDebitMandate, singleTransfer } from '../services/monnify.js';
-import { formatNaira } from '../services/memory.js';
+import { createDirectDebitMandate, singleTransfer, verifyBankAccount } from '../services/monnify.js';
+import { formatNaira, formatSpokenNaira } from '../services/memory.js';
+import { textToSpeech } from '../services/ai.js';
 import { logger } from '../lib/logger.js';
 
 const router = Router();
@@ -39,16 +46,41 @@ router.post('/transfer', async (req, res) => {
     if (!requirePin(req, res)) return;
 
     const schema = z.object({
-      beneficiary_id: z.string().uuid(),
+      beneficiary_id: z.string().uuid().optional(),
+      account_number: z.string().optional(),
+      bank_code: z.string().optional(),
+      bank_name: z.string().optional(),
       amount_kobo: z.number().int().positive(),
       narration: z.string().optional(),
     });
     const body = schema.parse(req.body);
-    const bene = listBeneficiaries(req.user.id).find((b) => b.id === body.beneficiary_id);
-    if (!bene) return res.status(404).json({ error: 'Beneficiary not found' });
 
-    // Non-negotiable: voice path only hits saved beneficiaries (already true here)
-    if (bene.send_count === 0 && body.amount_kobo > 2_000_000) {
+    let destName = '';
+    let destBank = '';
+    let destBankCode = '';
+    let destAccount = '';
+    let isFirstSend = false;
+    let bene = null;
+
+    if (body.beneficiary_id) {
+      bene = listBeneficiaries(req.user.id).find((b) => b.id === body.beneficiary_id);
+      if (!bene) return res.status(404).json({ error: 'Beneficiary not found' });
+      destName = bene.full_name;
+      destBank = bene.bank_name;
+      destBankCode = bene.bank_code;
+      destAccount = bene.account_number;
+      isFirstSend = bene.send_count === 0;
+    } else if (body.account_number && body.bank_code) {
+      destName = `Account ${body.account_number}`;
+      destBank = body.bank_name || 'Unknown Bank';
+      destBankCode = body.bank_code;
+      destAccount = body.account_number;
+      isFirstSend = true;
+    } else {
+      return res.status(400).json({ error: 'Must provide beneficiary or account/bank' });
+    }
+
+    if (isFirstSend && body.amount_kobo > 2_000_000) {
       return res.status(400).json({ error: 'First-send cap is ₦20,000' });
     }
 
@@ -64,9 +96,9 @@ router.post('/transfer', async (req, res) => {
       monnify_ref: paymentReference,
       direction: 'outbound',
       amount_kobo: body.amount_kobo,
-      counterparty_name: bene.full_name,
-      counterparty_bank: bene.bank_name,
-      narration: body.narration || `Zuri to ${bene.nickname}`,
+      counterparty_name: destName,
+      counterparty_bank: destBank,
+      narration: body.narration || `Zuri Transfer`,
       category: 'family',
       status: 'pending',
       occurred_at: new Date().toISOString(),
@@ -75,9 +107,10 @@ router.post('/transfer', async (req, res) => {
     const result = await singleTransfer({
       amount: body.amount_kobo,
       reference: paymentReference,
-      narration: body.narration || `Zuri to ${bene.nickname}`,
-      destinationBankCode: bene.bank_code,
-      destinationAccountNumber: bene.account_number,
+      narration: body.narration || `Zuri Transfer`,
+      destinationBankCode: destBankCode,
+      destinationAccountNumber: destAccount,
+      destinationAccountName: destName,
     });
 
     adjustBalance(req.user.id, -body.amount_kobo);
@@ -86,23 +119,63 @@ router.post('/transfer', async (req, res) => {
       monnify_ref: paymentReference,
       direction: 'outbound',
       amount_kobo: body.amount_kobo,
-      counterparty_name: bene.full_name,
-      counterparty_bank: bene.bank_name,
-      narration: body.narration || `Zuri to ${bene.nickname}`,
+      counterparty_name: destName,
+      counterparty_bank: destBank,
+      narration: body.narration || `Zuri Transfer`,
       category: 'family',
       status: 'settled',
       occurred_at: new Date().toISOString(),
     });
 
-    bene.send_count += 1;
-    bene.last_sent_at = new Date().toISOString();
+    const receiverAccount = getAccountByReservedNumber(destAccount);
+    if (receiverAccount) {
+      adjustBalance(receiverAccount.user_id, body.amount_kobo);
+      upsertTransaction({
+        user_id: receiverAccount.user_id,
+        monnify_ref: `${paymentReference}-inbound`,
+        direction: 'inbound',
+        amount_kobo: body.amount_kobo,
+        counterparty_name: req.user.full_name,
+        counterparty_bank: 'Zuri',
+        narration: body.narration || `Zuri Transfer`,
+        category: 'transfer',
+        status: 'settled',
+        occurred_at: new Date().toISOString(),
+      });
+      logger.info({ receiver_id: receiverAccount.user_id, amount: body.amount_kobo }, 'Credited internal receiver for demo');
+    }
 
+    if (bene) {
+      getDb().prepare('UPDATE beneficiaries SET send_count = send_count + 1, last_sent_at = ? WHERE id = ?')
+        .run(new Date().toISOString(), bene.id);
+    }
+
+    const recipientLabel = bene ? bene.full_name : destName;
+    const recipientNick = bene ? bene.nickname : destName;
     logger.info({ ref: paymentReference }, 'Transfer settled');
+
+    const text = `Money has landed with ${recipientNick}. ${formatNaira(body.amount_kobo)} sent to ${recipientLabel}.`;
+    const spokenText = `Money has landed with ${recipientNick}. ${formatSpokenNaira(body.amount_kobo)} sent to ${recipientLabel}.`;
+    
+    const tts = await textToSpeech(spokenText, req.user.language_pref);
+    
+    const msg = pushConversation({
+      user_id: req.user.id,
+      role: 'zuri',
+      text,
+      language: req.user.language_pref,
+      intent: 'transfer_success',
+      audio_url: tts.audioUrl,
+    });
+
     res.json({
       ok: true,
       transaction: row,
       monnify: result,
-      spoken: `Money has landed with ${bene.nickname}. ${formatNaira(body.amount_kobo)} sent to ${bene.full_name}.`,
+      account_name: destName,
+      message: msg,
+      spoken: text,
+      audioUrl: tts.audioUrl,
     });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
@@ -163,6 +236,28 @@ router.post('/bulk-transfer', async (req, res) => {
   }
 });
 
+router.post('/verify-account', async (req, res) => {
+  try {
+    const schema = z.object({
+      account_number: z.string().length(10),
+      bank_code: z.string().min(3),
+    });
+    const body = schema.parse(req.body);
+    const verified = await verifyBankAccount({
+      accountNumber: body.account_number,
+      bankCode: body.bank_code,
+    });
+    res.json({
+      account_name: verified.accountName,
+      account_number: verified.accountNumber,
+      bank_code: verified.bankCode,
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/goal', async (req, res) => {
   try {
     if (!requirePin(req, res)) return;
@@ -174,23 +269,26 @@ router.post('/goal', async (req, res) => {
       goal_id: z.string().uuid().nullable().optional(),
     });
     const body = schema.parse(req.body);
-    const db = getDb();
-    let goal = body.goal_id ? db.goals.find((g) => g.id === body.goal_id && g.user_id === req.user.id) : null;
+    let goal = body.goal_id ? getGoalById(req.user.id, body.goal_id) : null;
 
-    const mandateReference = `ZURI-MD-${randomUUID()}`;
-    const mandate = await createDirectDebitMandate({
-      customerName: req.user.full_name,
-      customerEmail: req.user.email,
-      amount: body.recurring_amount_kobo,
-      mandateReference,
-    });
+    let mandateReference = null;
+    if (body.recurring_amount_kobo > 0) {
+      const mandate = await createDirectDebitMandate({
+        customerName: req.user.full_name,
+        customerEmail: req.user.email,
+        amount: body.recurring_amount_kobo,
+        mandateReference: `ZURI-MD-${randomUUID()}`,
+      });
+      mandateReference = mandate.mandateReference;
+    }
 
     if (goal) {
-      goal.target_amount_kobo = body.target_amount_kobo;
-      goal.target_date = body.target_date;
-      goal.recurring_amount_kobo = body.recurring_amount_kobo;
-      goal.monnify_mandate_ref = mandate.mandateReference;
+      if (body.target_amount_kobo) goal.target_amount_kobo = body.target_amount_kobo;
+      if (body.target_date) goal.target_date = body.target_date;
+      if (body.recurring_amount_kobo !== undefined) goal.recurring_amount_kobo = body.recurring_amount_kobo;
+      if (mandateReference) goal.monnify_mandate_ref = mandateReference;
       goal.status = 'active';
+      updateGoal(goal);
     } else {
       goal = {
         id: randomUUID(),
@@ -199,18 +297,38 @@ router.post('/goal', async (req, res) => {
         target_amount_kobo: body.target_amount_kobo,
         target_date: body.target_date,
         current_amount_kobo: 0,
-        recurring_amount_kobo: body.recurring_amount_kobo,
-        monnify_mandate_ref: mandate.mandateReference,
+        recurring_amount_kobo: body.recurring_amount_kobo || 0,
+        monnify_mandate_ref: mandateReference,
         status: 'active',
         created_at: new Date().toISOString(),
       };
-      db.goals.push(goal);
+      insertGoal(goal);
     }
+
+    let text = `Done. I've created your ${goal.name} goal.`;
+    let spokenText = text;
+    if (body.recurring_amount_kobo > 0) {
+      text = `Done. I'll pull ${formatNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
+      spokenText = `Done. I'll pull ${formatSpokenNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
+    }
+
+    const tts = await textToSpeech(spokenText, req.user.language_pref);
+
+    const msg = pushConversation({
+      user_id: req.user.id,
+      role: 'zuri',
+      text,
+      language: req.user.language_pref,
+      intent: 'goal_created',
+      audio_url: tts.audioUrl,
+    });
 
     res.json({
       goal,
       mandate,
-      spoken: `Done. I'll pull ${formatNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`,
+      message: msg,
+      spoken: text,
+      audioUrl: tts.audioUrl,
     });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
@@ -223,6 +341,7 @@ router.post('/automation', async (req, res) => {
   const row = {
     id: randomUUID(),
     user_id: req.user.id,
+    name: req.body.name || 'Untitled Automation',
     trigger_type: req.body.trigger_type || 'inbound_credit',
     trigger_config: req.body.trigger_config || {},
     action_type: req.body.action_type || 'skim_to_goal',
@@ -230,15 +349,82 @@ router.post('/automation', async (req, res) => {
     active: true,
     created_at: new Date().toISOString(),
   };
-  getDb().automations.push(row);
+  insertAutomation(row);
   res.status(201).json({ automation: row });
 });
 
 router.patch('/goals/:id', (req, res) => {
-  const goal = getDb().goals.find((g) => g.id === req.params.id && g.user_id === req.user.id);
+  const goal = getGoalById(req.user.id, req.params.id);
   if (!goal) return res.status(404).json({ error: 'Not found' });
   if (req.body.status) goal.status = req.body.status;
   if (req.body.name) goal.name = req.body.name;
+  if (req.body.target_amount_kobo !== undefined) goal.target_amount_kobo = req.body.target_amount_kobo;
+  if (req.body.recurring_amount_kobo !== undefined) goal.recurring_amount_kobo = req.body.recurring_amount_kobo;
+  updateGoal(goal);
+  res.json({ goal });
+});
+
+router.post('/goals/:id/deposit', async (req, res) => {
+  if (!requirePin(req, res)) return;
+  const goal = getGoalById(req.user.id, req.params.id);
+  if (!goal) return res.status(404).json({ error: 'Goal not found' });
+  const amount = parseInt(req.body.amount_kobo, 10);
+  if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+  
+  if (req.user.current_balance_kobo < amount) {
+    return res.status(400).json({ error: 'Insufficient balance' });
+  }
+
+  adjustBalance(req.user.id, -amount);
+  goal.current_amount_kobo += amount;
+  updateGoal(goal);
+
+  upsertTransaction({
+    user_id: req.user.id,
+    amount_kobo: amount,
+    direction: 'OUT',
+    monnify_ref: `GOAL-DEP-${Date.now()}`,
+    status: 'SUCCESSFUL',
+    narration: `Deposit to ${goal.name}`,
+    category: 'goal',
+    counterparty_name: null,
+    counterparty_bank: null,
+    occurred_at: new Date().toISOString(),
+  });
+
+  res.json({ goal });
+});
+
+router.post('/goals/:id/withdraw', async (req, res) => {
+  if (!requirePin(req, res)) return;
+  const goal = getGoalById(req.user.id, req.params.id);
+  if (!goal) return res.status(404).json({ error: 'Goal not found' });
+  
+  let amount = req.body.amount_kobo;
+  if (amount === 'ALL') amount = goal.current_amount_kobo;
+  else amount = parseInt(amount, 10);
+  
+  if (isNaN(amount) || amount <= 0 || amount > goal.current_amount_kobo) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
+  goal.current_amount_kobo -= amount;
+  updateGoal(goal);
+  adjustBalance(req.user.id, amount);
+
+  upsertTransaction({
+    user_id: req.user.id,
+    amount_kobo: amount,
+    direction: 'IN',
+    monnify_ref: `GOAL-WTH-${Date.now()}`,
+    status: 'SUCCESSFUL',
+    narration: `Withdrawal from ${goal.name}`,
+    category: 'goal',
+    counterparty_name: null,
+    counterparty_bank: null,
+    occurred_at: new Date().toISOString(),
+  });
+
   res.json({ goal });
 });
 

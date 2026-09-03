@@ -31,7 +31,7 @@ app.use(
   }),
 );
 
-app.get('/health', (_req, res) => {
+app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
     product: 'Zuri',
@@ -40,16 +40,16 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.use('/auth', authRoutes);
-app.use('/beneficiaries', beneficiaryRoutes);
-app.use('/', accountRoutes);
-app.use('/conversation', conversationRoutes);
-app.use('/actions', actionRoutes);
-app.use('/webhooks', webhookRoutes);
-app.use('/settings', settingsRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/beneficiaries', beneficiaryRoutes);
+app.use('/api', accountRoutes);
+app.use('/api/conversation', conversationRoutes);
+app.use('/api/actions', actionRoutes);
+app.use('/api/webhooks', webhookRoutes);
+app.use('/api/settings', settingsRoutes);
 
 /** SSE stream for proactive Zuri (salary-landed etc.) */
-app.get('/events/stream', authRequired, (req, res) => {
+app.get('/api/events/stream', authRequired, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -66,8 +66,8 @@ app.get('/events/stream', authRequired, (req, res) => {
 });
 
 /** Convenience: reset + reseed demo */
-app.post('/demo/reset', (_req, res) => {
-  const { user } = seedDemoAccount();
+app.post('/api/demo/reset', async (_req, res) => {
+  const { user } = await seedDemoAccount();
   const account = getAccountForUser(user.id);
   res.json({
     ok: true,
@@ -77,9 +77,9 @@ app.post('/demo/reset', (_req, res) => {
   });
 });
 
-app.post('/demo/salary-landed', authRequired, (req, res) => {
+app.post('/api/demo/salary-landed', authRequired, async (req, res) => {
   const amount = req.body?.amount_kobo || 45_000_000;
-  const result = processInboundCredit(req.user.id, {
+  const result = await processInboundCredit(req.user.id, {
     amountKobo: amount,
     sourceName: 'Design Corp Ltd',
     monnifyRef: `DEMO-SALARY-${Date.now()}`,
@@ -89,7 +89,7 @@ app.post('/demo/salary-landed', authRequired, (req, res) => {
 });
 
 // Boot
-seedDemoAccount();
+await seedDemoAccount();
 const demoUser = findUserByPhone('08012345678');
 
 app.listen(PORT, () => {
