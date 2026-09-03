@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { getDb, listBeneficiaries } from '../db/store.js';
+import { getDb, listBeneficiaries, insertBeneficiary, deleteBeneficiary } from '../db/store.js';
 import { authRequired } from '../middleware/auth.js';
 import { NIGERIAN_BANKS, verifyBankAccount } from '../services/monnify.js';
 
@@ -41,7 +41,7 @@ router.post('/', authRequired, async (req, res) => {
       send_count: 0,
       created_at: new Date().toISOString(),
     };
-    getDb().beneficiaries.push(row);
+    insertBeneficiary(row);
     res.status(201).json({
       beneficiary: row,
       verification: { accountName: verified.accountName, confirmed: true },
@@ -53,12 +53,9 @@ router.post('/', authRequired, async (req, res) => {
 });
 
 router.delete('/:id', authRequired, (req, res) => {
-  const db = getDb();
-  const idx = db.beneficiaries.findIndex(
-    (b) => b.id === req.params.id && b.user_id === req.user.id,
-  );
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  db.beneficiaries.splice(idx, 1);
+  if (!deleteBeneficiary(req.user.id, req.params.id)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   res.json({ ok: true });
 });
 

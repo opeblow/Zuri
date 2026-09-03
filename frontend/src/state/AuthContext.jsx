@@ -29,6 +29,29 @@ export function AuthProvider({ children }) {
       .finally(() => setBooting(false));
   }, [token]);
 
+  useEffect(() => {
+    if (!token) return;
+
+    const eventSource = new EventSource(`/api/events/stream?token=${token}`);
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'proactive_message') {
+          window.dispatchEvent(new CustomEvent('zuri_proactive_message', { detail: data.message }));
+        } else if (data.type === 'refresh') {
+          api.account(token).then(setAccount).catch(console.error);
+        }
+      } catch (err) {
+        console.error('SSE parsing error:', err);
+      }
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [token]);
+
   function persist(nextToken, nextUser) {
     setToken(nextToken);
     setUser(nextUser);

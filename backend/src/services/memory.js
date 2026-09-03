@@ -1,8 +1,10 @@
+import numberToWords from 'number-to-words';
 import {
   getAccountForUser,
   listBeneficiaries,
   listGoals,
   listTransactions,
+  listAutomations,
 } from '../db/store.js';
 
 /**
@@ -13,6 +15,7 @@ export function buildMemorySnapshot(user) {
   const account = getAccountForUser(user.id);
   const beneficiaries = listBeneficiaries(user.id);
   const goals = listGoals(user.id).filter((g) => g.status === 'active');
+  const automations = listAutomations(user.id);
   const recent = listTransactions(user.id, { limit: 10 });
   const last30 = listTransactions(user.id, { limit: 200 }).filter((t) => {
     const age = Date.now() - new Date(t.occurred_at).getTime();
@@ -72,6 +75,15 @@ export function buildMemorySnapshot(user) {
       monthly_kobo: g.recurring_amount_kobo,
       monthly_display: formatNaira(g.recurring_amount_kobo),
       progress_pct: Math.round((g.current_amount_kobo / g.target_amount_kobo) * 100),
+      recurring_amount_kobo: g.recurring_amount_kobo,
+    })),
+    automations: automations.map((a) => ({
+      id: a.id,
+      name: a.name,
+      trigger_type: a.trigger_type,
+      action_type: a.action_type,
+      action_config: a.action_config,
+      active: a.active,
     })),
     recent_categories: {
       food_last_30d_kobo: categorySum('food'),
@@ -101,4 +113,9 @@ export function formatNaira(kobo) {
     currency: 'NGN',
     maximumFractionDigits: 0,
   }).format(naira);
+}
+
+export function formatSpokenNaira(kobo) {
+  const naira = (kobo || 0) / 100;
+  return `${numberToWords.toWords(naira)} Naira`;
 }

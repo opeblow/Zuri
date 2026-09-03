@@ -7,7 +7,18 @@ export default function History() {
   const [rows, setRows] = useState([]);
 
   useEffect(() => {
-    api.transactions(token).then((d) => setRows(d.transactions || []));
+    function fetchHistory() {
+      api.transactions(token).then((d) => setRows(d.transactions || []));
+    }
+    fetchHistory();
+    
+    window.addEventListener('zuri_refresh', fetchHistory);
+    window.addEventListener('zuri_proactive_message', fetchHistory);
+    
+    return () => {
+      window.removeEventListener('zuri_refresh', fetchHistory);
+      window.removeEventListener('zuri_proactive_message', fetchHistory);
+    };
   }, [token]);
 
   return (

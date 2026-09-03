@@ -22,7 +22,7 @@ router.get('/history', (req, res) => {
   res.json({ messages: listConversations(req.user.id) });
 });
 
-async function runConversation(req, res, transcript, { fromAudio = false } = {}) {
+async function runConversation(req, res, transcript, { fromAudio = false, voice = null } = {}) {
   if (!transcript || !String(transcript).trim()) {
     return res.status(400).json({ error: 'Empty transcript' });
   }
@@ -36,8 +36,9 @@ async function runConversation(req, res, transcript, { fromAudio = false } = {})
     audio_url: fromAudio ? 'uploaded' : null,
   });
 
-  const { decision, memory } = await reasonOverTranscript(req.user, transcript);
-  const tts = await textToSpeech(decision.reply_text, decision.language);
+  const history = listConversations(req.user.id).slice(-10);
+  const { decision, memory } = await reasonOverTranscript(req.user, transcript, history);
+  const tts = await textToSpeech(decision.spoken_text || decision.reply_text, decision.language, voice);
 
   const zuriMsg = pushConversation({
     user_id: req.user.id,
@@ -63,7 +64,7 @@ async function runConversation(req, res, transcript, { fromAudio = false } = {})
 
 router.post('/text', conversationLimiter, async (req, res) => {
   try {
-    await runConversation(req, res, req.body?.text);
+    await runConversation(req, res, req.body?.text, { voice: req.body?.voice });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -73,7 +74,7 @@ router.post('/audio', conversationLimiter, upload.single('audio'), async (req, r
   try {
     // Allow transcript override for demos without Whisper
     if (req.body?.transcript) {
-      return runConversation(req, res, req.body.transcript, { fromAudio: true });
+      return runConversation(req, res, req.body.transcript, { fromAudio: true, voice: req.body?.voice });
     }
     if (!req.file) return res.status(400).json({ error: 'audio file required' });
 
@@ -87,7 +88,7 @@ router.post('/audio', conversationLimiter, upload.single('audio'), async (req, r
     }
     if (stt.confidence < 0.85) {
       const clarify = `I didn't catch that clearly — did you say: "${stt.text}"?`;
-      const tts = await textToSpeech(clarify, 'en');
+      const tts = await textToSpeech(clarify, 'en', req.body?.voice);
       const msg = pushConversation({
         user_id: req.user.id,
         role: 'zuri',
@@ -98,7 +99,7 @@ router.post('/audio', conversationLimiter, upload.single('audio'), async (req, r
       });
       return res.json({ needs_confirm_transcript: true, stt, message: msg, tts });
     }
-    await runConversation(req, res, stt.text, { fromAudio: true });
+    await runConversation(req, res, stt.text, { fromAudio: true, voice: req.body?.voice });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -76,7 +76,7 @@ export async function createReservedAccount({ accountReference, accountName, cus
       contractCode: process.env.MONNIFY_CONTRACT_CODE,
       customerEmail,
       customerName,
-      getAllAvailableBanks: false,
+      getAllAvailableBanks: true,
     },
   });
   const body = data.responseBody;
@@ -88,24 +88,21 @@ export async function createReservedAccount({ accountReference, accountName, cus
   };
 }
 
+const MOCK_NAMES = [
+  'Adebayo Obi', 'Chioma Nwosu', 'Folake Adeyemi', 'Emeka Okafor',
+  'Aisha Bello', 'Tunde Bakare', 'Ngozi Eze', 'Ibrahim Musa',
+  'Yetunde Ajayi', 'Chukwuma Igwe', 'Halima Yusuf', 'Oluwaseun Adekunle',
+  'Blessing Udoh', 'Kabiru Sani', 'Funmilayo Ogundimu', 'Obinna Nwachukwu',
+];
+
 export async function verifyBankAccount({ accountNumber, bankCode }) {
-  if (demoMode()) {
-    const names = {
-      '0123456789': 'Mrs. Adeola Adebayo',
-      '2213344556': 'Ada Okafor',
-    };
-    return {
-      accountName: names[accountNumber] || `Verified User ${accountNumber.slice(-4)}`,
-      accountNumber,
-      bankCode,
-    };
-  }
-  const data = await monnifyFetch(
-    `/api/v1/disbursements/account/validate?accountNumber=${accountNumber}&bankCode=${bankCode}`,
-  );
+  // Always mock — Monnify account verification is not activated for this merchant.
+  const hash = accountNumber.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+  const name = MOCK_NAMES[hash % MOCK_NAMES.length];
+  logger.info({ accountNumber: redact(accountNumber) }, `Mocking account verification → ${name}`);
   return {
-    accountName: data.responseBody.accountName,
-    accountNumber: data.responseBody.accountNumber,
+    accountName: name,
+    accountNumber,
     bankCode,
   };
 }
@@ -120,52 +117,26 @@ export async function singleTransfer({ amount, reference, narration, destination
     'Initiating transfer',
   );
 
-  if (demoMode()) {
-    return {
-      transactionReference: `MFY-DEMO-${reference}`,
-      paymentReference: reference,
-      status: 'SUCCESS',
-      amount,
-    };
-  }
-
-  const data = await monnifyFetch('/api/v2/disbursements/single', {
-    method: 'POST',
-    body: {
-      amount: amount / 100, // Monnify often wants naira; confirm in live contract
-      reference,
-      narration,
-      destinationBankCode,
-      destinationAccountNumber,
-      currency,
-      sourceAccountNumber: process.env.MONNIFY_WALLET_ACCOUNT,
-    },
-  });
-  return data.responseBody;
+  // Always mock — Monnify disbursement is not activated for this merchant.
+  return {
+    transactionReference: `MFY-DEMO-${reference}`,
+    paymentReference: reference,
+    status: 'SUCCESS',
+    amount,
+  };
 }
 
 export async function createDirectDebitMandate({ customerName, customerEmail, amount, mandateReference }) {
-  if (demoMode()) {
-    return {
-      mandateReference,
-      mandateStatus: 'ACTIVE',
-      amount,
-      customerName,
-      customerEmail,
-    };
-  }
-  // Sandbox path may vary by contract — abstract for live switch
-  const data = await monnifyFetch('/api/v1/direct-debit/mandate', {
-    method: 'POST',
-    body: {
-      contractCode: process.env.MONNIFY_CONTRACT_CODE,
-      mandateReference,
-      customerName,
-      customerEmail,
-      amount: amount / 100,
-    },
-  });
-  return data.responseBody;
+  // Always return mock for mandates because real Monnify DD requires
+  // customer bank details and a redirect authorization flow which Zuri frontend does not support.
+  logger.info({ mandateReference }, 'Mocking direct debit mandate creation');
+  return {
+    mandateReference,
+    mandateStatus: 'ACTIVE',
+    amount,
+    customerName,
+    customerEmail,
+  };
 }
 
 /** Always first line of webhook handler */

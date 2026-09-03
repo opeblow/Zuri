@@ -28,6 +28,7 @@ router.get('/account', authRequired, (req, res) => {
     bank_name: account.bank_name,
     balance_kobo: account.balance_kobo,
     balance_display: formatNaira(account.balance_kobo),
+    demo_mode: process.env.DEMO_MODE !== 'false',
     monthly_summary: {
       inflow_kobo: inflow,
       outflow_kobo: outflow,

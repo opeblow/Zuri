@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { useAuth } from '../state/AuthContext.jsx';
+import { speakText } from '../lib/api.js';
 
 const tabs = [
   { to: '/app', end: true, label: 'Talk', icon: MicIcon },
@@ -9,6 +12,55 @@ const tabs = [
 ];
 
 export default function Shell() {
+  const { token, refreshAccount } = useAuth();
+
+  useEffect(() => {
+    let aborted = false;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const res = await fetch('/api/events/stream', {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        });
+        const reader = res.body?.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+          for (const part of parts) {
+            const line = part.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            const payload = JSON.parse(line.slice(6));
+            if (payload.type === 'proactive_message' && payload.message) {
+              const speak = payload.message.spoken_text || payload.message.text;
+              speakText(speak, payload.message.language, payload.message.audio_url);
+              refreshAccount();
+              window.dispatchEvent(new CustomEvent('zuri_proactive_message', { detail: payload.message }));
+            }
+            if (payload.type === 'refresh') {
+              refreshAccount();
+              window.dispatchEvent(new Event('zuri_refresh'));
+            }
+          }
+        }
+      } catch {
+        /* stream closed */
+      }
+    })();
+
+    return () => {
+      aborted = true;
+      controller.abort();
+    };
+  }, [token, refreshAccount]);
+
   return (
     <div className="phone">
       <div className="shell">

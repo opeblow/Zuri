@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { buildMemorySnapshot, formatNaira } from './memory.js';
+import { buildMemorySnapshot, formatNaira, formatSpokenNaira } from './memory.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -24,6 +24,7 @@ export const DecisionSchema = z.object({
   language: z.enum(['en', 'yo', 'pcm', 'ig', 'ha']).default('en'),
   confidence: z.number().min(0).max(1),
   reply_text: z.string(),
+  spoken_text: z.string(),
   requires_confirmation: z.boolean().default(true),
   pending_action: z
     .object({
@@ -36,13 +37,17 @@ export const DecisionSchema = z.object({
 
 const SYSTEM_RULES = `
 You are Zuri, a conversational Nigerian money coach.
+Your personality is Gen Z, short, and concise. Don't be verbose. Be punchy.
+
 Rules:
 1) Always confirm before executing money movement.
 2) Never invent account numbers — only use beneficiaries from memory.
 3) Ground advice in the memory numbers; do not guess.
 4) Reply in the same language the user used (en/yo/pcm).
-5) NEVER mention "kobo" in your spoken reply_text. Always convert kobo amounts to Naira (e.g. divide by 100) and say "Naira" in your reply_text.
-5) Return structured JSON exactly matching this schema:
+5) NEVER mention "kobo" in your spoken_text. Always convert kobo amounts to Naira (e.g. divide by 100).
+6) IMPORTANT: Users speak in Naira (e.g. "5k" = 5000 Naira). You MUST convert this to kobo (multiply by 100) for the amount_kobo field (e.g., 5000 Naira = 500000 kobo).
+7) The reply_text should contain formatted digits and symbols (e.g. ₦5,000). The spoken_text MUST phonetically spell out ALL numbers and currencies as words (e.g. "five thousand Naira") so the voice synthesizer reads it flawlessly.
+8) Return structured JSON exactly matching this schema:
 {
   "action": "none" | "check_balance" | "spending_insight" | "advice" | "transfer" | "bulk_transfer" | "create_goal" | "setup_direct_debit" | "ask_clarify" | "cannot_help",
   "amount_kobo": number | null,
@@ -51,6 +56,7 @@ Rules:
   "language": "en" | "yo" | "pcm" | "ig" | "ha",
   "confidence": number (0 to 1),
   "reply_text": string,
+  "spoken_text": string,
   "requires_confirmation": boolean,
   "pending_action": { "type": string, "payload": object } | null
 }
@@ -88,11 +94,17 @@ export function parseAmountRegex(text) {
 function findBeneficiary(memory, ref) {
   if (!ref) return null;
   const needle = ref.toLowerCase();
-  return memory.beneficiaries.find(
+  const bene = memory.beneficiaries.find(
     (b) =>
+      b.id === ref ||
       b.nickname.toLowerCase() === needle ||
       b.full_name.toLowerCase().includes(needle) ||
       needle.includes(b.nickname.toLowerCase()),
+  );
+  if (bene) return bene;
+  // Fuzzier matching: just check if needle is in nickname or vice-versa
+  return memory.beneficiaries.find(
+    (b) => needle.includes(b.nickname.toLowerCase()) || b.nickname.toLowerCase().includes(needle)
   );
 }
 
@@ -100,7 +112,7 @@ function findBeneficiary(memory, ref) {
  * Demo reasoning engine — handles the three killer moments + core intents
  * without requiring Anthropic/OpenAI keys. Same DecisionSchema as live LLM.
  */
-function demoReason(transcript, memory) {
+function demoReason(transcript, memory, history = []) {
   const text = transcript.trim();
   const language = detectLanguage(text);
   const lower = text.toLowerCase();
@@ -113,7 +125,7 @@ function demoReason(transcript, memory) {
   ) {
     const rent = memory.goals.find((g) => /rent/i.test(g.name));
     const balance = memory.user.current_balance_kobo;
-    const monthlyRent = rent?.monthly ?? 9_000_000;
+    const monthlyRent = rent?.recurring_amount_kobo ?? 9_000_000;
     const availableAfterCommit = balance - monthlyRent;
     const canBuyCheap = availableAfterCommit > 15_000_000;
 
@@ -185,14 +197,21 @@ function demoReason(transcript, memory) {
 
     if (!bene) {
       return DecisionSchema.parse({
-        action: 'ask_clarify',
+        action: 'transfer',
         language,
-        confidence: 0.7,
+        confidence: 0.85,
         reply_text:
           language === 'pcm'
-            ? 'I no sabi who that person be o. Save them as beneficiary first, then talk to me again.'
-            : "I can only send to people you've already saved. Add them as a beneficiary first, then ask me again.",
-        requires_confirmation: false,
+            ? `I no get ${recipient_ref || 'that person'} for your beneficiary list. Make we enter their bank details.`
+            : `I don't have ${recipient_ref || 'that person'} in your beneficiaries yet. Let's enter their bank details.`,
+        requires_confirmation: true,
+        pending_action: {
+          type: 'prompt_beneficiary_details',
+          payload: {
+            recipient_ref: recipient_ref || 'Unknown',
+            amount_kobo: amount_kobo || 0,
+          },
+        },
       });
     }
 
@@ -299,9 +318,12 @@ function monthsUntil(isoDate) {
   );
 }
 
-async function liveLlmReason(transcript, memory) {
+async function liveLlmReason(transcript, memory, history = []) {
   const apiKey = process.env.ANTHROPIC_API_KEY || process.env.GITHUB_AI_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
+  
+  const historyText = history.length ? `\n\nRecent Conversation History:\n${history.map(m => `${m.role === 'user' ? 'User' : 'Zuri'}: ${m.text}`).join('\n')}` : '';
+  const fullSystem = `${SYSTEM_RULES}\n\nMemory:\n${JSON.stringify(memory)}${historyText}`;
 
   // Anthropic path
   if (process.env.ANTHROPIC_API_KEY) {
@@ -315,7 +337,7 @@ async function liveLlmReason(transcript, memory) {
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1024,
-        system: `${SYSTEM_RULES}\n\nMemory:\n${JSON.stringify(memory)}`,
+        system: fullSystem,
         messages: [
           {
             role: 'user',
@@ -348,7 +370,7 @@ async function liveLlmReason(transcript, memory) {
         model: ghModel,
         response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: `${SYSTEM_RULES}\nMemory:\n${JSON.stringify(memory)}` },
+          { role: 'system', content: fullSystem },
           {
             role: 'user',
             content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
@@ -375,7 +397,7 @@ async function liveLlmReason(transcript, memory) {
       model: 'gpt-4o',
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: `${SYSTEM_RULES}\nMemory:\n${JSON.stringify(memory)}` },
+        { role: 'system', content: fullSystem },
         {
           role: 'user',
           content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
@@ -394,30 +416,127 @@ async function liveLlmReason(transcript, memory) {
 /**
  * Main Mind entry: transcript + user → validated decision.
  */
-export async function reasonOverTranscript(user, transcript) {
+export async function reasonOverTranscript(user, transcript, history = []) {
   const memory = buildMemorySnapshot(user);
   const regexAmount = parseAmountRegex(transcript);
 
-  let decision = await liveLlmReason(transcript, memory);
-  if (!decision) decision = demoReason(transcript, memory);
+  let decision = await liveLlmReason(transcript, memory, history);
+  if (!decision) decision = demoReason(transcript, memory, history);
 
-  // Double-parse amounts: if regex and decision disagree on transfer, ask
-  if (
-    decision.action === 'transfer' &&
-    regexAmount &&
-    decision.amount_kobo &&
-    Math.abs(regexAmount - decision.amount_kobo) > 100
-  ) {
-    decision = DecisionSchema.parse({
-      ...decision,
-      action: 'ask_clarify',
-      confidence: 0.4,
-      requires_confirmation: false,
-      pending_action: null,
-      reply_text: `I heard two different amounts. Did you mean ${formatNaira(regexAmount)} or ${formatNaira(decision.amount_kobo)}?`,
-    });
+  const isTransfer =
+    decision.action === 'transfer' ||
+    decision.pending_action?.type === 'transfer' ||
+    decision.pending_action?.type === 'prompt_beneficiary_details';
+
+  // Enforce strict safety and logic on transfers
+  if (isTransfer) {
+    decision.action = 'transfer';
+    decision.requires_confirmation = true;
+    
+    let recipient_ref = decision.recipient_ref || decision.pending_action?.payload?.recipient_ref;
+
+    // If LLM missed the recipient but we can guess it from transcript:
+    if (!recipient_ref) {
+      const nickMatch =
+        transcript.match(/(?:to|give|send)\s+([A-Za-zÀ-ÿ]+)/i) ||
+        transcript.match(/\b(mummy|mama|ada|landlord)\b/i);
+      recipient_ref = nickMatch ? nickMatch[1] : null;
+    }
+    
+    // 1. Resolve beneficiary
+    const bene = findBeneficiary(memory, recipient_ref);
+    
+    // 2. Resolve amount
+    const amount = decision.amount_kobo || decision.pending_action?.payload?.amount_kobo || regexAmount;
+
+    if (!recipient_ref) {
+      decision = DecisionSchema.parse({
+        ...decision,
+        action: 'ask_clarify',
+        requires_confirmation: false,
+        pending_action: null,
+        reply_text: `Who do you want to send the money to?`,
+      });
+    } else if (!bene) {
+      decision = DecisionSchema.parse({
+        ...decision,
+        action: 'transfer',
+        requires_confirmation: true,
+        recipient_ref: recipient_ref,
+        amount_kobo: amount,
+        pending_action: {
+          type: 'prompt_beneficiary_details',
+          payload: {
+            recipient_ref: recipient_ref,
+            amount_kobo: amount || 0,
+          }
+        },
+        reply_text: `I couldn't find ${recipient_ref} in your beneficiaries. Let's enter their account details.`,
+      });
+    } else {
+      if (!amount) {
+        decision = DecisionSchema.parse({
+          ...decision,
+          action: 'ask_clarify',
+          requires_confirmation: false,
+          pending_action: null,
+          reply_text: `How much do you want to send to ${bene?.nickname || 'them'}?`,
+        });
+      } else if (memory.user.current_balance_kobo < amount) {
+        // 3. Balance check
+        decision = DecisionSchema.parse({
+          ...decision,
+          action: 'cannot_help',
+          requires_confirmation: false,
+          pending_action: null,
+          reply_text: `You don't have enough balance to send ${formatNaira(amount)}. Your balance is ${formatNaira(memory.user.current_balance_kobo)}.`,
+        });
+      } else {
+        // 4. Double-parse amount conflict
+        if (regexAmount && Math.abs(regexAmount - amount) > 100) {
+          decision = DecisionSchema.parse({
+            ...decision,
+            action: 'ask_clarify',
+            requires_confirmation: false,
+            pending_action: null,
+            reply_text: `I heard two different amounts. Did you mean ${formatNaira(regexAmount)} or ${formatNaira(amount)}?`,
+          });
+        } else {
+          // 5. Valid transfer - strictly attach pending_action
+          const firstSend = bene?.send_count === 0;
+          const unusual = amount > (bene?.usual_amount_kobo || 0) * 3;
+          
+          let reply_text = `I'll send ${formatNaira(amount)} to ${bene.full_name} (${bene.bank_name}). Confirm with your PIN to go ahead.`;
+          if (unusual) {
+            reply_text = `That's more than 3× what you usually send ${bene.nickname}. Just checking — ${formatNaira(amount)} to ${bene.full_name}. Enter your PIN if that's right.`;
+          }
+          let finalAmount = amount;
+          if (firstSend) {
+            finalAmount = Math.min(amount, 2_000_000);
+            reply_text = `First time sending to ${bene.full_name}. Cap on first sends is ₦20,000. Confirm with PIN to send ${formatNaira(finalAmount)}.`;
+          }
+          
+          decision = DecisionSchema.parse({
+            ...decision,
+            action: 'transfer',
+            amount_kobo: finalAmount,
+            recipient_ref: bene.nickname,
+            requires_confirmation: true, // Absolute strict enforcement
+            reply_text: reply_text,
+            pending_action: {
+              type: 'transfer',
+              payload: {
+                beneficiary_id: bene.id,
+                amount_kobo: finalAmount,
+                unusual: amount > bene.usual_amount_kobo * 3,
+              },
+            },
+          });
+        }
+      }
+    }
   }
-
+  
   if (decision.confidence < 0.9 && decision.action !== 'ask_clarify') {
     decision.requires_confirmation = true;
     decision.reply_text = `${decision.reply_text} (Just confirming I heard you right.)`;
@@ -450,29 +569,29 @@ export async function speechToText(buffer, filename = 'audio.webm') {
   return { text: data.text, language: data.language || 'en', confidence: 0.9, demo: false };
 }
 
-/** TTS — ElevenLabs when keyed; else return null (frontend uses speechSynthesis) */
-export async function textToSpeech(text, language = 'en') {
-  if (!process.env.ELEVENLABS_API_KEY || !process.env.ELEVENLABS_VOICE_ID) {
+/** TTS — YarnGPT when keyed; else return null (frontend uses speechSynthesis) */
+export async function textToSpeech(text, language = 'en', voice = null) {
+  if (!process.env.YARNGPT_API_KEY) {
     return { audioUrl: null, cached: false, fallback: 'browser' };
   }
   const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${process.env.ELEVENLABS_VOICE_ID}`,
+    `https://yarngpt.ai/api/v1/tts`,
     {
       method: 'POST',
       headers: {
-        'xi-api-key': process.env.ELEVENLABS_API_KEY,
+        'Authorization': `Bearer ${process.env.YARNGPT_API_KEY}`,
         'Content-Type': 'application/json',
-        Accept: 'audio/mpeg',
       },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_flash_v2',
+        voice: voice || process.env.YARNGPT_VOICE || 'Idera',
+        response_format: 'mp3',
       }),
     },
   );
   if (!res.ok) {
     const textErr = await res.text();
-    logger.error({ status: res.status, error: textErr }, 'ElevenLabs TTS failed');
+    logger.error({ status: res.status, error: textErr }, 'YarnGPT TTS failed');
     return { audioUrl: null, cached: false, fallback: 'browser' };
   }
   const buf = Buffer.from(await res.arrayBuffer());
@@ -484,14 +603,52 @@ export async function textToSpeech(text, language = 'en') {
  * Builds the proactive "salary landed" spoken moment (Moment 2).
  */
 export function buildSalaryLandedMessage(user, amountKobo, memory) {
-  const rent = memory.goals.find((g) => /rent/i.test(g.name));
-  const tax = memory.goals.find((g) => /tax/i.test(g.name));
-  const mummy = memory.beneficiaries.find((b) => /mummy/i.test(b.nickname));
-  const rentBit = rent ? formatNaira(rent.monthly) : formatNaira(9_000_000);
-  const mummyBit = mummy ? formatNaira(5_000_000) : formatNaira(5_000_000);
-  const taxBit = tax ? formatNaira(tax.monthly || 4_000_000) : formatNaira(4_000_000);
-  const committed = (rent?.monthly || 9_000_000) + 5_000_000 + (tax?.monthly || 4_000_000);
-  const available = amountKobo + memory.user.current_balance_kobo - committed;
+  const activeGoals = memory.goals.filter((g) => g.status === 'active' && g.recurring_amount_kobo > 0);
+  
+  let committedKobo = 0;
+  const committedTextParts = [];
+  const committedSpokenParts = [];
+  
+  if (activeGoals.length > 0) {
+    for (const goal of activeGoals) {
+      committedKobo += goal.recurring_amount_kobo;
+      committedTextParts.push(`${formatNaira(goal.recurring_amount_kobo)} to your ${goal.name} goal`);
+      committedSpokenParts.push(`${formatSpokenNaira(goal.recurring_amount_kobo)} to your ${goal.name} goal`);
+    }
+  }
 
-  return `Your salary just landed — ${formatNaira(amountKobo)}. Before you do anything, here's what's already committed: ${rentBit} to your rent goal, ${mummyBit} for Mum's monthly, ${taxBit} tax pot skim. That leaves about ${formatNaira(Math.max(available, 0))} free to play with.`;
+  const activeSkims = memory.automations.filter((a) => a.active && a.trigger_type === 'inbound_credit' && a.action_type === 'skim_to_goal');
+  for (const auto of activeSkims) {
+    const pct = auto.action_config?.percentage || 0;
+    if (pct > 0) {
+      const skimKobo = Math.round((amountKobo * pct) / 100);
+      committedKobo += skimKobo;
+      const goal = memory.goals.find(g => g.id === auto.action_config?.goal_id);
+      const goalName = goal ? goal.name : 'savings';
+      committedTextParts.push(`${formatNaira(skimKobo)} ${goalName} skim (${pct}%)`);
+      committedSpokenParts.push(`${formatSpokenNaira(skimKobo)} ${goalName} skim (${pct} percent)`);
+    }
+  }
+
+  const available = amountKobo - committedKobo;
+  
+  let text = `Your salary just landed — ${formatNaira(amountKobo)}. `;
+  let spoken_text = `Your salary just landed — ${formatSpokenNaira(amountKobo)}. `;
+  
+  if (committedTextParts.length > 0) {
+    text += `Before you do anything, here's what's already committed: ${committedTextParts.join(', ')}. That leaves about ${formatNaira(Math.max(available, 0))} free to play with.`;
+    spoken_text += `Before you do anything, here's what's already committed: ${committedSpokenParts.join(', ')}. That leaves about ${formatSpokenNaira(Math.max(available, 0))} free to play with.`;
+  } else {
+    text += `You don't have any active goals or commitments yet. Why not save some of this for a rainy day?`;
+    spoken_text += `You don't have any active goals or commitments yet. Why not save some of this for a rainy day?`;
+  }
+
+  return { text, spoken_text };
+}
+
+export function buildInboundTransferMessage(user, amountKobo, sourceName, memory) {
+  return {
+    text: `You just received ${formatNaira(amountKobo)} from ${sourceName}. Your total balance is now ${formatNaira(memory.user.current_balance_kobo)}.`,
+    spoken_text: `You just received ${formatSpokenNaira(amountKobo)} from ${sourceName}. Your total balance is now ${formatSpokenNaira(memory.user.current_balance_kobo)}.`
+  };
 }

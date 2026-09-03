@@ -13,9 +13,16 @@ async function request(path, { token, method = 'GET', body } = {}) {
     method,
     headers: authHeaders(token),
     body: body ? JSON.stringify(body) : undefined,
+    cache: 'no-store',
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || 'Request failed');
+  if (!res.ok) {
+    let msg = data.error || data.message || 'Request failed';
+    if (typeof msg === 'object') {
+      msg = Array.isArray(msg) ? msg.map(e => e.message || JSON.stringify(e)).join(', ') : JSON.stringify(msg);
+    }
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -30,9 +37,10 @@ export const api = {
   addBeneficiary: (token, body) => request('/beneficiaries', { token, method: 'POST', body }),
   banks: () => request('/beneficiaries/banks'),
   history: (token) => request('/conversation/history', { token }),
-  talk: (token, text) => request('/conversation/text', { token, method: 'POST', body: { text } }),
+  talk: (token, text, voice) => request('/conversation/text', { token, method: 'POST', body: { text, voice } }),
   transfer: (token, body) => request('/actions/transfer', { token, method: 'POST', body }),
   createGoal: (token, body) => request('/actions/goal', { token, method: 'POST', body }),
+  verifyAccount: (token, body) => request('/actions/verify-account', { token, method: 'POST', body }),
   salaryDemo: (token) => request('/demo/salary-landed', { token, method: 'POST', body: {} }),
   resetDemo: () => request('/demo/reset', { method: 'POST', body: {} }),
   patchGoal: (token, id, body) =>
@@ -47,7 +55,13 @@ export function formatNaira(kobo) {
   }).format((kobo || 0) / 100);
 }
 
-export function speakText(text, lang = 'en') {
+export function speakText(text, lang = 'en', audioUrl = null) {
+  if (audioUrl) {
+    const audio = new Audio(audioUrl);
+    audio.play().catch((err) => console.error('Audio playback failed:', err));
+    return;
+  }
+
   if (!window.speechSynthesis || !text) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
