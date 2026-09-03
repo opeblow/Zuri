@@ -123,3 +123,41 @@ export function pushConversation(entry) {
   db.conversations.push(row);
   return row;
 }
+
+export function findTransactionById(userId, txId) {
+  return db.transactions.find((t) => t.id === txId && t.user_id === userId);
+}
+
+export function updateUser(userId, fields) {
+  const user = findUserById(userId);
+  if (!user) return null;
+  const allowed = ['language_pref', 'daily_biometric_limit_kobo', 'pin_hash', 'biometric_enabled'];
+  for (const key of Object.keys(fields)) {
+    if (allowed.includes(key)) user[key] = fields[key];
+  }
+  return user;
+}
+
+export function deleteGoal(userId, goalId) {
+  const idx = db.goals.findIndex((g) => g.id === goalId && g.user_id === userId);
+  if (idx === -1) return false;
+  db.goals.splice(idx, 1);
+  return true;
+}
+
+export function deleteAutomation(userId, automationId) {
+  const idx = db.automations.findIndex((a) => a.id === automationId && a.user_id === userId);
+  if (idx === -1) return false;
+  db.automations.splice(idx, 1);
+  return true;
+}
+
+/** Cascade-delete all user data (for account deletion). */
+export function deleteUserData(userId) {
+  const tables = ['accounts', 'beneficiaries', 'transactions', 'goals', 'conversations', 'automations'];
+  for (const table of tables) {
+    db[table] = db[table].filter((row) => row.user_id !== userId);
+  }
+  db.users = db.users.filter((u) => u.id !== userId);
+  return true;
+}

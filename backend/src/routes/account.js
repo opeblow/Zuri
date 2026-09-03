@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import {
+  findTransactionById,
   getAccountForUser,
   listGoals,
   listTransactions,
@@ -63,6 +65,28 @@ router.get('/goals', authRequired, (req, res) => {
 /** Internal-style memory snapshot (also used by conversation). Exposed for demo inspector. */
 router.get('/memory/snapshot', authRequired, (req, res) => {
   res.json(buildMemorySnapshot(req.user));
+});
+
+/** PATCH /transactions/:id — reclassify a transaction's category */
+const VALID_CATEGORIES = ['salary', 'family', 'food', 'transport', 'savings', 'bills', 'entertainment', 'health', 'other'];
+const reclassifySchema = z.object({
+  category: z.enum(VALID_CATEGORIES),
+});
+
+router.patch('/transactions/:id', authRequired, (req, res) => {
+  try {
+    const body = reclassifySchema.parse(req.body);
+    const tx = findTransactionById(req.user.id, req.params.id);
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    tx.category = body.category;
+    res.json({
+      ok: true,
+      transaction: { ...tx, amount_display: formatNaira(tx.amount_kobo) },
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
