@@ -380,14 +380,16 @@ router.post('/goals/:id/deposit', async (req, res) => {
   updateGoal(goal);
 
   upsertTransaction({
-    id: randomUUID(),
     user_id: req.user.id,
     amount_kobo: amount,
-    type: 'debit',
-    reference: `GOAL-DEP-${Date.now()}`,
-    status: 'success',
+    direction: 'OUT',
+    monnify_ref: `GOAL-DEP-${Date.now()}`,
+    status: 'SUCCESSFUL',
     narration: `Deposit to ${goal.name}`,
-    created_at: new Date().toISOString(),
+    category: 'goal',
+    counterparty_name: null,
+    counterparty_bank: null,
+    occurred_at: new Date().toISOString(),
   });
 
   res.json({ goal });
@@ -411,14 +413,16 @@ router.post('/goals/:id/withdraw', async (req, res) => {
   adjustBalance(req.user.id, amount);
 
   upsertTransaction({
-    id: randomUUID(),
     user_id: req.user.id,
     amount_kobo: amount,
-    type: 'credit',
-    reference: `GOAL-WTH-${Date.now()}`,
-    status: 'success',
+    direction: 'IN',
+    monnify_ref: `GOAL-WTH-${Date.now()}`,
+    status: 'SUCCESSFUL',
     narration: `Withdrawal from ${goal.name}`,
-    created_at: new Date().toISOString(),
+    category: 'goal',
+    counterparty_name: null,
+    counterparty_bank: null,
+    occurred_at: new Date().toISOString(),
   });
 
   res.json({ goal });

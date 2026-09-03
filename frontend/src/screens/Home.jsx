@@ -21,7 +21,7 @@ export default function Home() {
   const { token, account, refreshAccount, user } = useAuth();
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
-  const [voice, setVoice] = useState('Idera');
+  const [voice, setVoice] = useState('Zainab');
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [pending, setPending] = useState(null);

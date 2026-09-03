@@ -795,7 +795,7 @@ export async function textToSpeech(text, language = 'en', voice = null) {
       },
       body: JSON.stringify({
         text,
-        voice: voice || process.env.YARNGPT_VOICE || 'Idera',
+        voice: voice || process.env.YARNGPT_VOICE || 'Zainab',
         response_format: 'mp3',
       }),
     },
