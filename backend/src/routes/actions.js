@@ -4,8 +4,11 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
   adjustBalance,
+  deleteAutomation,
+  deleteGoal,
   getAccountForUser,
   getDb,
+  listAutomations,
   listBeneficiaries,
   upsertTransaction,
 } from '../db/store.js';
@@ -107,37 +110,57 @@ router.post('/transfer', async (req, res) => {
   }
 });
 
-router.post('/bulk-transfer', async (req, res) => {
-  if (!requirePin(req, res)) return;
-  const items = Array.isArray(req.body?.transfers) ? req.body.transfers : [];
-  if (!items.length) return res.status(400).json({ error: 'transfers[] required' });
+const bulkTransferItemSchema = z.object({
+  beneficiary_id: z.string().uuid(),
+  amount_kobo: z.number().int().positive(),
+  narration: z.string().optional(),
+});
 
-  const results = [];
-  for (const item of items) {
-    req.body = { ...item, pin: req.body.pin };
-    // Sequential for clarity in demo
-    const bene = listBeneficiaries(req.user.id).find((b) => b.id === item.beneficiary_id);
-    if (!bene) {
-      results.push({ error: 'beneficiary missing', item });
-      continue;
+router.post('/bulk-transfer', async (req, res) => {
+  try {
+    if (!requirePin(req, res)) return;
+    const items = z.array(bulkTransferItemSchema).min(1).parse(req.body?.transfers);
+
+    const account = getAccountForUser(req.user.id);
+    const totalKobo = items.reduce((sum, i) => sum + i.amount_kobo, 0);
+    if (!account || account.balance_kobo < totalKobo) {
+      return res.status(400).json({
+        error: 'Insufficient balance for bulk transfer',
+        required_kobo: totalKobo,
+        available_kobo: account?.balance_kobo ?? 0,
+      });
     }
-    const paymentReference = `ZURI-BULK-${randomUUID()}`;
-    adjustBalance(req.user.id, -item.amount_kobo);
-    upsertTransaction({
-      user_id: req.user.id,
-      monnify_ref: paymentReference,
-      direction: 'outbound',
-      amount_kobo: item.amount_kobo,
-      counterparty_name: bene.full_name,
-      counterparty_bank: bene.bank_name,
-      narration: 'Zuri bulk',
-      category: 'family',
-      status: 'settled',
-      occurred_at: new Date().toISOString(),
-    });
-    results.push({ ok: true, paymentReference, beneficiary: bene.nickname });
+
+    const results = [];
+    for (const item of items) {
+      const bene = listBeneficiaries(req.user.id).find((b) => b.id === item.beneficiary_id);
+      if (!bene) {
+        results.push({ error: 'beneficiary not found', beneficiary_id: item.beneficiary_id });
+        continue;
+      }
+      const paymentReference = `ZURI-BULK-${randomUUID()}`;
+      adjustBalance(req.user.id, -item.amount_kobo);
+      upsertTransaction({
+        user_id: req.user.id,
+        monnify_ref: paymentReference,
+        direction: 'outbound',
+        amount_kobo: item.amount_kobo,
+        counterparty_name: bene.full_name,
+        counterparty_bank: bene.bank_name,
+        narration: item.narration || 'Zuri bulk',
+        category: 'family',
+        status: 'settled',
+        occurred_at: new Date().toISOString(),
+      });
+      bene.send_count += 1;
+      bene.last_sent_at = new Date().toISOString();
+      results.push({ ok: true, paymentReference, beneficiary: bene.nickname, amount_kobo: item.amount_kobo });
+    }
+    res.json({ results, total_sent_kobo: totalKobo });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
+    res.status(500).json({ error: err.message });
   }
-  res.json({ results });
 });
 
 router.post('/goal', async (req, res) => {
@@ -217,6 +240,26 @@ router.patch('/goals/:id', (req, res) => {
   if (req.body.status) goal.status = req.body.status;
   if (req.body.name) goal.name = req.body.name;
   res.json({ goal });
+});
+
+router.delete('/goals/:id', (req, res) => {
+  if (!deleteGoal(req.user.id, req.params.id)) {
+    return res.status(404).json({ error: 'Goal not found' });
+  }
+  res.json({ ok: true });
+});
+
+/** GET /actions/automations — list user's active automation rules */
+router.get('/automations', (req, res) => {
+  res.json({ automations: listAutomations(req.user.id) });
+});
+
+/** DELETE /actions/automations/:id — remove an automation rule */
+router.delete('/automations/:id', (req, res) => {
+  if (!deleteAutomation(req.user.id, req.params.id)) {
+    return res.status(404).json({ error: 'Automation not found' });
+  }
+  res.json({ ok: true });
 });
 
 export default router;

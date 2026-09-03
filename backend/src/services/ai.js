@@ -41,7 +41,19 @@ Rules:
 2) Never invent account numbers — only use beneficiaries from memory.
 3) Ground advice in the memory numbers; do not guess.
 4) Reply in the same language the user used (en/yo/pcm).
-5) Return structured JSON only matching the schema.
+5) NEVER mention "kobo" in your spoken reply_text. Always convert kobo amounts to Naira (e.g. divide by 100) and say "Naira" in your reply_text.
+5) Return structured JSON exactly matching this schema:
+{
+  "action": "none" | "check_balance" | "spending_insight" | "advice" | "transfer" | "bulk_transfer" | "create_goal" | "setup_direct_debit" | "ask_clarify" | "cannot_help",
+  "amount_kobo": number | null,
+  "recipient_ref": string | null,
+  "goal_ref": string | null,
+  "language": "en" | "yo" | "pcm" | "ig" | "ha",
+  "confidence": number (0 to 1),
+  "reply_text": string,
+  "requires_confirmation": boolean,
+  "pending_action": { "type": string, "payload": object } | null
+}
 `;
 
 function detectLanguage(text) {
@@ -288,9 +300,10 @@ function monthsUntil(isoDate) {
 }
 
 async function liveLlmReason(transcript, memory) {
-  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.GITHUB_AI_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) return null;
 
+  // Anthropic path
   if (process.env.ANTHROPIC_API_KEY) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -319,6 +332,36 @@ async function liveLlmReason(transcript, memory) {
     const text = data.content?.map((c) => c.text).join('') || '';
     const json = JSON.parse(text.replace(/```json|```/g, '').trim());
     return DecisionSchema.parse(json);
+  }
+
+  // GitHub Models path (free, OpenAI-compatible API)
+  if (process.env.GITHUB_AI_API_KEY) {
+    const ghModel = process.env.GITHUB_AI_MODEL || 'gpt-4o-mini';
+    const ghBase = process.env.GITHUB_AI_BASE_URL || 'https://models.inference.ai.azure.com';
+    const res = await fetch(`${ghBase}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        Authorization: `Bearer ${process.env.GITHUB_AI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: ghModel,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: `${SYSTEM_RULES}\nMemory:\n${JSON.stringify(memory)}` },
+          {
+            role: 'user',
+            content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status, provider: 'github-models' }, 'GitHub Models failed — falling back');
+      return null;
+    }
+    const data = await res.json();
+    return DecisionSchema.parse(JSON.parse(data.choices[0].message.content));
   }
 
   // OpenAI path
@@ -423,11 +466,15 @@ export async function textToSpeech(text, language = 'en') {
       },
       body: JSON.stringify({
         text,
-        model_id: language === 'en' ? 'eleven_monolingual_v1' : 'eleven_multilingual_v2',
+        model_id: 'eleven_flash_v2',
       }),
     },
   );
-  if (!res.ok) return { audioUrl: null, cached: false, fallback: 'browser' };
+  if (!res.ok) {
+    const textErr = await res.text();
+    logger.error({ status: res.status, error: textErr }, 'ElevenLabs TTS failed');
+    return { audioUrl: null, cached: false, fallback: 'browser' };
+  }
   const buf = Buffer.from(await res.arrayBuffer());
   const b64 = buf.toString('base64');
   return { audioUrl: `data:audio/mpeg;base64,${b64}`, cached: false, fallback: null };

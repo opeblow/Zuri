@@ -8,6 +8,7 @@ import beneficiaryRoutes from './routes/beneficiaries.js';
 import accountRoutes from './routes/account.js';
 import conversationRoutes from './routes/conversation.js';
 import actionRoutes from './routes/actions.js';
+import settingsRoutes from './routes/settings.js';
 import webhookRoutes, { proactiveBus, processInboundCredit } from './routes/webhooks.js';
 import { authRequired } from './middleware/auth.js';
 import { seedDemoAccount } from './db/seed.js';
@@ -45,6 +46,7 @@ app.use('/', accountRoutes);
 app.use('/conversation', conversationRoutes);
 app.use('/actions', actionRoutes);
 app.use('/webhooks', webhookRoutes);
+app.use('/settings', settingsRoutes);
 
 /** SSE stream for proactive Zuri (salary-landed etc.) */
 app.get('/events/stream', authRequired, (req, res) => {
