@@ -62,6 +62,30 @@ export default function Home() {
     return () => window.removeEventListener('zuri_proactive_message', handleProactive);
   }, []);
 
+  /**
+   * Handles a decision payload from either SSE stream or standard REST.
+   * Text and YarnGPT audio arrive together — plays immediately.
+   */
+  function handleDecision(data) {
+    setMessages((m) => [...m, data.message]);
+
+    // Play YarnGPT audio immediately (arrives with the response)
+    const audioUrl = data.tts?.audioUrl || data.message?.audio_url;
+    if (audioUrl) {
+      const audio = new Audio(audioUrl);
+      audio.play().catch(() => {});
+    }
+
+    if (data.decision.requires_confirmation && data.decision.pending_action) {
+      setPending(data.decision);
+      if (data.decision.pending_action.type === 'prompt_beneficiary_details') {
+        setBankDetailsOpen(true);
+      } else {
+        setPinOpen(true);
+      }
+    }
+  }
+
   async function sendUtterance(utterance) {
     const clean = utterance.trim();
     if (!clean || busy) return;
@@ -77,28 +101,29 @@ export default function Home() {
       },
     ]);
     try {
-      const data = await api.talk(token, clean, voice);
-      setMessages((m) => [...m, data.message]);
-      const speak = data.decision.spoken_text || data.decision.reply_text;
-      speakText(speak, data.decision.language, data.tts?.audioUrl || data.message?.audio_url);
-
-      if (data.decision.requires_confirmation && data.decision.pending_action) {
-        setPending(data.decision);
-        if (data.decision.pending_action.type === 'prompt_beneficiary_details') {
-          setBankDetailsOpen(true);
-        } else {
-          setPinOpen(true);
-        }
-      }
-    } catch (err) {
-      setMessages((m) => [
-        ...m,
-        {
-          id: `err-${Date.now()}`,
-          role: 'zuri',
-          text: err.message || 'Something went quiet on my end.',
+      // Try SSE streaming first (fastest path)
+      await api.talkStream(token, clean, voice, {
+        onStatus: () => {}, // "thinking" phase — spinner already visible
+        onDecision: (data) => handleDecision(data),
+        onError: (err) => {
+          throw new Error(err.error || 'Stream error');
         },
-      ]);
+      });
+    } catch (streamErr) {
+      // Fallback to standard REST if SSE fails
+      try {
+        const data = await api.talk(token, clean, voice);
+        handleDecision(data);
+      } catch (err) {
+        setMessages((m) => [
+          ...m,
+          {
+            id: `err-${Date.now()}`,
+            role: 'zuri',
+            text: err.message || 'Something went quiet on my end.',
+          },
+        ]);
+      }
     } finally {
       setBusy(false);
     }
@@ -151,7 +176,7 @@ export default function Home() {
           // saveBeneOpen will be triggered when overlay dismisses
           return;
         }
-      } else if (type === 'create_goal_mandate') {
+      } else if (type === 'create_goal' || type === 'create_goal_mandate') {
         const result = await api.createGoal(token, { ...payload, pin });
         const spoken = result.spoken;
         setMessages((m) => [
@@ -166,6 +191,12 @@ export default function Home() {
         ]);
         speakText(spoken, 'en', result.audioUrl);
         setOverlay({ show: true, status: 'success', message: 'Done!' });
+      } else if (type === 'deposit_goal') {
+        const result = await api.depositGoal(token, payload.goal_id, { amount_kobo: payload.amount_kobo, pin });
+        setOverlay({ show: true, status: 'success', message: 'Deposited!' });
+      } else if (type === 'withdraw_goal') {
+        const result = await api.withdrawGoal(token, payload.goal_id, { amount_kobo: payload.amount_kobo, pin });
+        setOverlay({ show: true, status: 'success', message: 'Withdrawn!' });
       }
       setPending(null);
     } catch (err) {

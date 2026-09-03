@@ -271,19 +271,22 @@ router.post('/goal', async (req, res) => {
     const body = schema.parse(req.body);
     let goal = body.goal_id ? getGoalById(req.user.id, body.goal_id) : null;
 
-    const mandateReference = `ZURI-MD-${randomUUID()}`;
-    const mandate = await createDirectDebitMandate({
-      customerName: req.user.full_name,
-      customerEmail: req.user.email,
-      amount: body.recurring_amount_kobo,
-      mandateReference,
-    });
+    let mandateReference = null;
+    if (body.recurring_amount_kobo > 0) {
+      const mandate = await createDirectDebitMandate({
+        customerName: req.user.full_name,
+        customerEmail: req.user.email,
+        amount: body.recurring_amount_kobo,
+        mandateReference: `ZURI-MD-${randomUUID()}`,
+      });
+      mandateReference = mandate.mandateReference;
+    }
 
     if (goal) {
-      goal.target_amount_kobo = body.target_amount_kobo;
-      goal.target_date = body.target_date;
-      goal.recurring_amount_kobo = body.recurring_amount_kobo;
-      goal.monnify_mandate_ref = mandate.mandateReference;
+      if (body.target_amount_kobo) goal.target_amount_kobo = body.target_amount_kobo;
+      if (body.target_date) goal.target_date = body.target_date;
+      if (body.recurring_amount_kobo !== undefined) goal.recurring_amount_kobo = body.recurring_amount_kobo;
+      if (mandateReference) goal.monnify_mandate_ref = mandateReference;
       goal.status = 'active';
       updateGoal(goal);
     } else {
@@ -294,16 +297,20 @@ router.post('/goal', async (req, res) => {
         target_amount_kobo: body.target_amount_kobo,
         target_date: body.target_date,
         current_amount_kobo: 0,
-        recurring_amount_kobo: body.recurring_amount_kobo,
-        monnify_mandate_ref: mandate.mandateReference,
+        recurring_amount_kobo: body.recurring_amount_kobo || 0,
+        monnify_mandate_ref: mandateReference,
         status: 'active',
         created_at: new Date().toISOString(),
       };
       insertGoal(goal);
     }
 
-    const text = `Done. I'll pull ${formatNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
-    const spokenText = `Done. I'll pull ${formatSpokenNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
+    let text = `Done. I've created your ${goal.name} goal.`;
+    let spokenText = text;
+    if (body.recurring_amount_kobo > 0) {
+      text = `Done. I'll pull ${formatNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
+      spokenText = `Done. I'll pull ${formatSpokenNaira(body.recurring_amount_kobo)} every month into ${goal.name} via direct debit.`;
+    }
 
     const tts = await textToSpeech(spokenText, req.user.language_pref);
 
@@ -351,7 +358,69 @@ router.patch('/goals/:id', (req, res) => {
   if (!goal) return res.status(404).json({ error: 'Not found' });
   if (req.body.status) goal.status = req.body.status;
   if (req.body.name) goal.name = req.body.name;
+  if (req.body.target_amount_kobo !== undefined) goal.target_amount_kobo = req.body.target_amount_kobo;
+  if (req.body.recurring_amount_kobo !== undefined) goal.recurring_amount_kobo = req.body.recurring_amount_kobo;
   updateGoal(goal);
+  res.json({ goal });
+});
+
+router.post('/goals/:id/deposit', async (req, res) => {
+  if (!requirePin(req, res)) return;
+  const goal = getGoalById(req.user.id, req.params.id);
+  if (!goal) return res.status(404).json({ error: 'Goal not found' });
+  const amount = parseInt(req.body.amount_kobo, 10);
+  if (isNaN(amount) || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+  
+  if (req.user.current_balance_kobo < amount) {
+    return res.status(400).json({ error: 'Insufficient balance' });
+  }
+
+  adjustBalance(req.user.id, -amount);
+  goal.current_amount_kobo += amount;
+  updateGoal(goal);
+
+  upsertTransaction({
+    id: randomUUID(),
+    user_id: req.user.id,
+    amount_kobo: amount,
+    type: 'debit',
+    reference: `GOAL-DEP-${Date.now()}`,
+    status: 'success',
+    narration: `Deposit to ${goal.name}`,
+    created_at: new Date().toISOString(),
+  });
+
+  res.json({ goal });
+});
+
+router.post('/goals/:id/withdraw', async (req, res) => {
+  if (!requirePin(req, res)) return;
+  const goal = getGoalById(req.user.id, req.params.id);
+  if (!goal) return res.status(404).json({ error: 'Goal not found' });
+  
+  let amount = req.body.amount_kobo;
+  if (amount === 'ALL') amount = goal.current_amount_kobo;
+  else amount = parseInt(amount, 10);
+  
+  if (isNaN(amount) || amount <= 0 || amount > goal.current_amount_kobo) {
+    return res.status(400).json({ error: 'Invalid amount' });
+  }
+
+  goal.current_amount_kobo -= amount;
+  updateGoal(goal);
+  adjustBalance(req.user.id, amount);
+
+  upsertTransaction({
+    id: randomUUID(),
+    user_id: req.user.id,
+    amount_kobo: amount,
+    type: 'credit',
+    reference: `GOAL-WTH-${Date.now()}`,
+    status: 'success',
+    narration: `Withdrawal from ${goal.name}`,
+    created_at: new Date().toISOString(),
+  });
+
   res.json({ goal });
 });
 

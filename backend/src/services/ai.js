@@ -30,6 +30,8 @@ export const DecisionSchema = z.object({
     'transfer',
     'bulk_transfer',
     'create_goal',
+    'deposit_goal',
+    'withdraw_goal',
     'setup_direct_debit',
     'ask_clarify',
     'cannot_help',
@@ -63,9 +65,11 @@ Rules:
 5) NEVER mention "kobo" in your spoken_text. Always convert kobo amounts to Naira (e.g. divide by 100).
 6) IMPORTANT: Users speak in Naira (e.g. "5k" = 5000 Naira). You MUST convert this to kobo (multiply by 100) for the amount_kobo field (e.g., 5000 Naira = 500000 kobo).
 7) The reply_text should contain formatted digits and symbols (e.g. ₦5,000). The spoken_text MUST phonetically spell out ALL numbers and currencies as words (e.g. "five thousand Naira") so the voice synthesizer reads it flawlessly.
-8) Return structured JSON exactly matching this schema:
+8) Use "create_goal", "deposit_goal", or "withdraw_goal" to manage goals. ALWAYS include the 'amount_kobo' if they mention an amount to deposit/withdraw/save.
+9) Reply in the language the user used (en/yo/pcm). If the user's language is ambiguous or English, respond using their profile default language: {{DEFAULT_LANG}}.
+10) Return structured JSON exactly matching this schema:
 {
-  "action": "none" | "check_balance" | "spending_insight" | "advice" | "transfer" | "bulk_transfer" | "create_goal" | "setup_direct_debit" | "ask_clarify" | "cannot_help",
+  "action": "none" | "check_balance" | "spending_insight" | "advice" | "transfer" | "bulk_transfer" | "create_goal" | "deposit_goal" | "withdraw_goal" | "setup_direct_debit" | "ask_clarify" | "cannot_help",
   "amount_kobo": number | null,
   "recipient_ref": string | null,
   "goal_ref": string | null,
@@ -78,13 +82,13 @@ Rules:
 }
 `;
 
-function detectLanguage(text) {
+function detectLanguage(text, defaultLang = 'en') {
   const t = text.toLowerCase();
   if (/[ṣẹọáíúàèìòùń]|ṣé|mo ní|owó|báyìí|rá|tuntun|jẹ́/.test(t) || /ṣe |naira|owo/.test(t)) {
     if (/ṣé|owó|báyìí|tuntun|mo ní|rà/.test(t)) return 'yo';
   }
   if (/\b(abeg|wetin|how far|na|una|dey|fit|sabi|chop)\b/i.test(text)) return 'pcm';
-  return 'en';
+  return defaultLang;
 }
 
 /** Independent regex amount parse (safety: compare with LLM amount). */
@@ -128,9 +132,9 @@ function findBeneficiary(memory, ref) {
  * Demo reasoning engine — handles the three killer moments + core intents
  * without requiring Anthropic/OpenAI keys. Same DecisionSchema as live LLM.
  */
-function demoReason(transcript, memory, history = []) {
+function demoReason(transcript, memory, history = [], defaultLang = 'en') {
   const text = transcript.trim();
-  const language = detectLanguage(text);
+  const language = detectLanguage(text, defaultLang);
   const lower = text.toLowerCase();
   const regexAmount = parseAmountRegex(text);
 
@@ -345,83 +349,107 @@ function monthsUntil(isoDate) {
   );
 }
 
-async function liveLlmReason(transcript, memory, history = []) {
-  const apiKey = process.env.ANTHROPIC_API_KEY || process.env.GITHUB_AI_API_KEY || process.env.OPENAI_API_KEY;
+async function callGroq(transcript, fullSystem) {
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return null;
-  
-  const historyText = history.length ? `\n\nRecent Conversation History:\n${history.map(m => `${m.role === 'user' ? 'User' : 'Zuri'}: ${m.text}`).join('\n')}` : '';
-  const fullSystem = `${SYSTEM_RULES}\n\nMemory:\n${JSON.stringify(memory)}${historyText}`;
 
-  // Anthropic path
-  if (process.env.ANTHROPIC_API_KEY) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const model = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        system: fullSystem,
-        messages: [
-          {
-            role: 'user',
-            content: `User said: """${transcript}"""\nRespond with JSON only matching DecisionSchema fields: action, amount_kobo, recipient_ref, goal_ref, language, confidence, reply_text, requires_confirmation, pending_action.`,
-          },
-        ],
-      }),
-    });
-    if (!res.ok) {
-      logger.warn({ status: res.status }, 'Anthropic failed — falling back to demo reasoner');
-      return null;
-    }
-    const data = await res.json();
-    const text = data.content?.map((c) => c.text).join('') || '';
-    const json = JSON.parse(text.replace(/```json|```/g, '').trim());
-    return DecisionSchema.parse(json);
-  }
-
-  // GitHub Models path (free, OpenAI-compatible API)
-  if (process.env.GITHUB_AI_API_KEY) {
-    const ghModel = process.env.GITHUB_AI_MODEL || 'gpt-4o-mini';
-    const ghBase = process.env.GITHUB_AI_BASE_URL || 'https://models.inference.ai.azure.com';
-    const res = await fetch(`${ghBase}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        Authorization: `Bearer ${process.env.GITHUB_AI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: ghModel,
+        model,
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: fullSystem },
           {
             role: 'user',
-            content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
+            content: `User said: """${transcript}""". Return DecisionSchema JSON matching fields: action, amount_kobo, recipient_ref, goal_ref, language, confidence, reply_text, spoken_text, requires_confirmation, pending_action.`,
           },
         ],
+        max_tokens: 512,
+        temperature: 0.1,
       }),
     });
+
     if (!res.ok) {
-      logger.warn({ status: res.status, provider: 'github-models' }, 'GitHub Models failed — falling back');
+      const errText = await res.text();
+      logger.warn({ status: res.status, error: errText, provider: 'groq' }, 'Groq API request failed — falling back');
       return null;
     }
-    const data = await res.json();
-    return DecisionSchema.parse(JSON.parse(data.choices[0].message.content));
-  }
 
-  // OpenAI path
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const data = await res.json();
+    const rawText = data.choices?.[0]?.message?.content || '';
+    const cleaned = rawText.replace(/```json|```/g, '').trim();
+    const json = JSON.parse(cleaned);
+
+    if (!json.spoken_text && json.reply_text) {
+      json.spoken_text = toSpoken(json.reply_text);
+    }
+    if (json.confidence === undefined || json.confidence === null) {
+      json.confidence = 0.9;
+    }
+
+    return DecisionSchema.parse(json);
+  } catch (err) {
+    logger.error({ err: err.message, provider: 'groq' }, 'Groq response processing error');
+    return null;
+  }
+}
+
+async function callAnthropic(transcript, fullSystem) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'claude-3-5-haiku-20241022',
+      max_tokens: 512,
+      system: fullSystem,
+      messages: [
+        {
+          role: 'user',
+          content: `User said: """${transcript}"""\nRespond with JSON only matching DecisionSchema fields: action, amount_kobo, recipient_ref, goal_ref, language, confidence, reply_text, spoken_text, requires_confirmation, pending_action.`,
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    logger.warn({ status: res.status, provider: 'anthropic' }, 'Anthropic failed — falling back');
+    return null;
+  }
+
+  const data = await res.json();
+  const text = data.content?.map((c) => c.text).join('') || '';
+  const json = JSON.parse(text.replace(/```json|```/g, '').trim());
+  return DecisionSchema.parse(json);
+}
+
+async function callGithub(transcript, fullSystem) {
+  const apiKey = process.env.GITHUB_AI_API_KEY;
+  if (!apiKey) return null;
+
+  const ghModel = process.env.GITHUB_AI_MODEL || 'gpt-4o-mini';
+  const ghBase = process.env.GITHUB_AI_BASE_URL || 'https://models.inference.ai.azure.com';
+  const res = await fetch(`${ghBase}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: ghModel,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: fullSystem },
@@ -430,14 +458,91 @@ async function liveLlmReason(transcript, memory, history = []) {
           content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
         },
       ],
+      max_tokens: 512,
     }),
   });
+
   if (!res.ok) {
-    logger.warn({ status: res.status }, 'OpenAI failed — falling back');
+    logger.warn({ status: res.status, provider: 'github-models' }, 'GitHub Models failed — falling back');
     return null;
   }
+
   const data = await res.json();
   return DecisionSchema.parse(JSON.parse(data.choices[0].message.content));
+}
+
+async function callOpenAI(transcript, fullSystem) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: fullSystem },
+        {
+          role: 'user',
+          content: `User said: """${transcript}""". Return DecisionSchema JSON.`,
+        },
+      ],
+      max_tokens: 512,
+    }),
+  });
+
+  if (!res.ok) {
+    logger.warn({ status: res.status, provider: 'openai' }, 'OpenAI failed — falling back');
+    return null;
+  }
+
+  const data = await res.json();
+  return DecisionSchema.parse(JSON.parse(data.choices[0].message.content));
+}
+
+async function liveLlmReason(transcript, memory, history = [], defaultLang = 'en') {
+  const historyText = history.length
+    ? `\n\nRecent Conversation History:\n${history.map((m) => `${m.role === 'user' ? 'User' : 'Zuri'}: ${m.text}`).join('\n')}`
+    : '';
+  const rulesWithLang = SYSTEM_RULES.replace('{{DEFAULT_LANG}}', defaultLang);
+  const fullSystem = `${rulesWithLang}\n\nMemory:\n${JSON.stringify(memory)}${historyText}`;
+
+  const selectedProvider = (process.env.AI_PROVIDER || 'auto').toLowerCase();
+
+  const providers = {
+    groq: callGroq,
+    anthropic: callAnthropic,
+    github: callGithub,
+    openai: callOpenAI,
+  };
+
+  // If a specific provider is configured in AI_PROVIDER
+  if (selectedProvider !== 'auto' && providers[selectedProvider]) {
+    try {
+      const decision = await providers[selectedProvider](transcript, fullSystem);
+      if (decision) return decision;
+    } catch (err) {
+      logger.warn({ err: err.message, provider: selectedProvider }, 'Selected AI provider failed — trying fallback order');
+    }
+  }
+
+  // Automatic fallback order (Groq → GitHub → Anthropic → OpenAI)
+  const fallbackOrder = ['groq', 'github', 'anthropic', 'openai'];
+  for (const p of fallbackOrder) {
+    if (selectedProvider !== 'auto' && p === selectedProvider) continue; // already tried above
+    try {
+      const decision = await providers[p](transcript, fullSystem);
+      if (decision) return decision;
+    } catch (err) {
+      logger.warn({ err: err.message, provider: p }, `Fallback provider ${p} failed`);
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -446,9 +551,10 @@ async function liveLlmReason(transcript, memory, history = []) {
 export async function reasonOverTranscript(user, transcript, history = []) {
   const memory = buildMemorySnapshot(user);
   const regexAmount = parseAmountRegex(transcript);
+  const defaultLang = user.language_pref || 'en';
 
-  let decision = await liveLlmReason(transcript, memory, history);
-  if (!decision) decision = demoReason(transcript, memory, history);
+  let decision = await liveLlmReason(transcript, memory, history, defaultLang);
+  if (!decision) decision = demoReason(transcript, memory, history, defaultLang);
 
   const isTransfer =
     decision.action === 'transfer' ||
@@ -575,6 +681,69 @@ export async function reasonOverTranscript(user, transcript, history = []) {
             },
           });
         }
+      }
+    }
+  }
+
+  // Intercept goal operations to prevent premature PIN UI or execute properly
+  if (['create_goal', 'deposit_goal', 'withdraw_goal'].includes(decision.action)) {
+    let amount = decision.amount_kobo || decision.pending_action?.payload?.amount_kobo || regexAmount;
+    
+    if (!amount && decision.action !== 'withdraw_goal') {
+      decision = DecisionSchema.parse({
+        ...decision,
+        action: 'ask_clarify',
+        requires_confirmation: false,
+        pending_action: null,
+        reply_text: `How much do you want to target for this goal?`,
+        spoken_text: `How much do you want to target for this goal?`,
+      });
+    } else {
+      let goalId = null;
+      let goalName = decision.goal_ref || 'Savings Goal';
+      if (decision.action !== 'create_goal') {
+        const existing = memory.goals.find(g => g.name.toLowerCase().includes(goalName.toLowerCase()));
+        if (existing) {
+          goalId = existing.id;
+          goalName = existing.name;
+        } else if (memory.goals.length === 1) {
+          goalId = memory.goals[0].id;
+          goalName = memory.goals[0].name;
+        } else if (!existing) {
+          const text = `I couldn't find a goal named ${goalName}. Which goal did you mean?`;
+          decision = DecisionSchema.parse({
+            ...decision,
+            action: 'ask_clarify',
+            requires_confirmation: false,
+            pending_action: null,
+            reply_text: text,
+            spoken_text: text,
+          });
+          amount = null; // skip the next block
+        }
+      }
+
+      if (amount || decision.action === 'withdraw_goal') {
+        decision.requires_confirmation = true;
+        let payload = { amount_kobo: amount || 0, goal_id: goalId, goal_name: goalName };
+        let type = decision.action; // 'create_goal', 'deposit_goal', 'withdraw_goal'
+        let text = decision.reply_text;
+        
+        if (decision.action === 'create_goal') {
+           text = `Let's create the ${goalName} goal for ${formatNaira(amount)}. Confirm with your PIN.`;
+           payload = { name: goalName, target_amount_kobo: amount, target_date: '2026-12-31', recurring_amount_kobo: 0 };
+        } else if (decision.action === 'deposit_goal') {
+           text = `I'll move ${formatNaira(amount)} into your ${goalName} goal. Confirm with your PIN.`;
+        } else if (decision.action === 'withdraw_goal') {
+           if (!amount) payload.amount_kobo = 'ALL'; // withdraw all flag
+           text = payload.amount_kobo === 'ALL' 
+             ? `I'll withdraw everything from your ${goalName} goal back to your balance. Confirm with PIN.`
+             : `I'll withdraw ${formatNaira(amount)} from your ${goalName} goal back to your balance. Confirm with PIN.`;
+        }
+
+        decision.reply_text = text;
+        decision.spoken_text = toSpoken(text);
+        decision.pending_action = { type, payload };
       }
     }
   }

@@ -1,6 +1,14 @@
 import { useAuth } from '../state/AuthContext.jsx';
-import { api } from '../lib/api.js';
+import { api, getLanguageLabel } from '../lib/api.js';
 import { useNavigate } from 'react-router-dom';
+
+const LANGUAGES = [
+  { id: 'en', label: 'English' },
+  { id: 'pcm', label: 'Pidgin' },
+  { id: 'yo', label: 'Yoruba' },
+  { id: 'ig', label: 'Igbo' },
+  { id: 'ha', label: 'Hausa' },
+];
 
 export default function Settings() {
   const { user, account, logout, token, setUser } = useAuth();
@@ -10,6 +18,15 @@ export default function Settings() {
     await api.resetDemo();
     logout();
     navigate('/');
+  }
+
+  async function selectLanguage(langId) {
+    setUser({ ...user, language_pref: langId });
+    try {
+      await api.updateProfile(token, { language_pref: langId });
+    } catch (err) {
+      console.error('Failed to save language preference:', err);
+    }
   }
 
   return (
@@ -28,17 +45,17 @@ export default function Settings() {
       <div className="row-card" style={{ marginBottom: 12 }}>
         <h3>Language</h3>
         <p className="lede" style={{ marginBottom: 10 }}>
-          Pref: {user?.language_pref}
+          Pref: {getLanguageLabel(user?.language_pref)}
         </p>
         <div className="chip-row">
-          {['en', 'pcm', 'yo'].map((l) => (
+          {LANGUAGES.map((l) => (
             <button
-              key={l}
+              key={l.id}
               type="button"
-              className={`chip${user?.language_pref === l ? ' active' : ''}`}
-              onClick={() => setUser({ ...user, language_pref: l })}
+              className={`chip${user?.language_pref === l.id ? ' active' : ''}`}
+              onClick={() => selectLanguage(l.id)}
             >
-              {l}
+              {l.label}
             </button>
           ))}
         </div>
