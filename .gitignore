@@ -1,10 +1,95 @@
+# ---- Dependencies ----
 node_modules/
+**/node_modules/
+
+# ---- Builds & output ----
 dist/
-.env
-*.log
-.DS_Store
-coverage/
+build/
+.parcel-cache/
 .vite/
+
+# ---- Environment files ----
+# Keep .env.example! Only ignore real env files / secrets.
+.env
+.env.*
+!.env.example
+.env.local
+.env.production
+
+# ---- Databases & data (never ship user data or local state) ----
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+data.db
+*.sql
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.python-version
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+*.egg-info/
+*.egg
+
+# ---- Logs ----
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---- Coverage / test artifacts ----
+coverage/
+.coverage
+htmlcov/
+.tmp/
+
+# ---- Uploads / media / temp ----
 uploads/
 tmp/
-# *.db
+thumbnails/
+*.tmp
+
+# ---- OS files ----
+.DS_Store
+.DS_Store*
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*~
+
+# ---- IDE / editor ----
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.project
+.classpath
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ---- Misc ----
+*.orig
+*.rej
+bundle.js
+vendor/
