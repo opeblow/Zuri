@@ -11,6 +11,34 @@ router.get('/banks', (_req, res) => {
   res.json({ banks: NIGERIAN_BANKS });
 });
 
+/**
+ * Resolve an account number + bank to the holder's name.
+ * Does NOT save anything — purely a lookup.
+ */
+router.post('/resolve', authRequired, async (req, res) => {
+  try {
+    const schema = z.object({
+      account_number: z.string().length(10),
+      bank_code: z.string().min(3),
+    });
+    const body = schema.parse(req.body);
+    const verified = await verifyBankAccount({
+      accountNumber: body.account_number,
+      bankCode: body.bank_code,
+    });
+    const bank = NIGERIAN_BANKS.find((b) => b.code === body.bank_code);
+    res.json({
+      account_name: verified.accountName,
+      account_number: body.account_number,
+      bank_code: body.bank_code,
+      bank_name: bank?.name || 'Bank',
+    });
+  } catch (err) {
+    if (err instanceof z.ZodError) return res.status(400).json({ error: err.errors });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/', authRequired, (req, res) => {
   res.json({ beneficiaries: listBeneficiaries(req.user.id) });
 });
@@ -39,6 +67,7 @@ router.post('/', authRequired, async (req, res) => {
       bank_name: bank?.name || 'Bank',
       last_sent_at: null,
       send_count: 0,
+      usual_amount_kobo: 0,
       created_at: new Date().toISOString(),
     };
     insertBeneficiary(row);

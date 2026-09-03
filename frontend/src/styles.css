@@ -717,6 +717,91 @@ a {
   padding: 40px 20px;
 }
 
+/* ——— Transfer Overlay ——— */
+.transfer-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(4, 18, 14, 0.82);
+  backdrop-filter: blur(12px);
+  display: grid;
+  place-items: center;
+  animation: fadeIn 0.2s ease;
+}
+
+.transfer-overlay-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.transfer-overlay-msg {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-align: center;
+  margin: 0;
+  max-width: 260px;
+  line-height: 1.4;
+}
+
+/* Spinner rotation */
+.transfer-spinner {
+  animation: fadeIn 0.15s ease;
+}
+
+.transfer-spinner-ring {
+  animation: spinRing 1s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes spinRing {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Result icon entrance */
+.transfer-result-enter {
+  animation: resultPop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1.2);
+}
+
+@keyframes resultPop {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Checkmark draw */
+.transfer-check-draw {
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  animation: drawStroke 0.4s 0.2s ease forwards;
+}
+
+/* X draw */
+.transfer-x-draw {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 30;
+  animation: drawStroke 0.3s 0.2s ease forwards;
+}
+
+@keyframes drawStroke {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 @media (max-width: 480px) {
   .app-frame {
     padding: 0;

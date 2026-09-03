@@ -7,6 +7,7 @@ import {
   deleteAutomation,
   deleteGoal,
   getAccountForUser,
+  getAccountByReservedNumber,
   getDb,
   getGoalById,
   insertGoal,
@@ -109,6 +110,7 @@ router.post('/transfer', async (req, res) => {
       narration: body.narration || `Zuri Transfer`,
       destinationBankCode: destBankCode,
       destinationAccountNumber: destAccount,
+      destinationAccountName: destName,
     });
 
     adjustBalance(req.user.id, -body.amount_kobo);
@@ -124,6 +126,24 @@ router.post('/transfer', async (req, res) => {
       status: 'settled',
       occurred_at: new Date().toISOString(),
     });
+
+    const receiverAccount = getAccountByReservedNumber(destAccount);
+    if (receiverAccount) {
+      adjustBalance(receiverAccount.user_id, body.amount_kobo);
+      upsertTransaction({
+        user_id: receiverAccount.user_id,
+        monnify_ref: `${paymentReference}-inbound`,
+        direction: 'inbound',
+        amount_kobo: body.amount_kobo,
+        counterparty_name: req.user.full_name,
+        counterparty_bank: 'Zuri',
+        narration: body.narration || `Zuri Transfer`,
+        category: 'transfer',
+        status: 'settled',
+        occurred_at: new Date().toISOString(),
+      });
+      logger.info({ receiver_id: receiverAccount.user_id, amount: body.amount_kobo }, 'Credited internal receiver for demo');
+    }
 
     if (bene) {
       getDb().prepare('UPDATE beneficiaries SET send_count = send_count + 1, last_sent_at = ? WHERE id = ?')

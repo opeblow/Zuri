@@ -96,32 +96,113 @@ const MOCK_NAMES = [
 ];
 
 export async function verifyBankAccount({ accountNumber, bankCode }) {
-  // Always mock — Monnify account verification is not activated for this merchant.
-  const hash = accountNumber.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
-  const name = MOCK_NAMES[hash % MOCK_NAMES.length];
-  logger.info({ accountNumber: redact(accountNumber) }, `Mocking account verification → ${name}`);
+  if (demoMode()) {
+    const hash = accountNumber.split('').reduce((s, c) => s + c.charCodeAt(0), 0);
+    const name = MOCK_NAMES[hash % MOCK_NAMES.length];
+    logger.info({ accountNumber: redact(accountNumber) }, `Demo mock verification → ${name}`);
+    return { accountName: name, accountNumber, bankCode };
+  }
+
+  const token = await getBearerToken();
+  const base = process.env.MONNIFY_BASE_URL || 'https://sandbox.monnify.com';
+
+  const data = await nameInquiry({ base, token, accountNumber, bankCode });
+
+  const body = data.responseBody;
+  logger.info({ accountNumber: redact(accountNumber) }, `Resolved → ${body.accountName}`);
   return {
-    accountName: name,
-    accountNumber,
+    accountName: body.accountName,
+    accountNumber: body.accountNumber || accountNumber,
     bankCode,
   };
 }
 
-export async function singleTransfer({ amount, reference, narration, destinationBankCode, destinationAccountNumber, currency = 'NGN' }) {
+/** Monnify-generated accounts (e.g. Moniepoint MFB reserved accounts). */
+async function nameInquiry({ base, token, accountNumber, bankCode }) {
+  const sessionId = createHash('sha256')
+    .update(`${accountNumber}:${bankCode}:${Date.now()}`)
+    .digest('hex')
+    .slice(0, 40);
+
+  const sandboxBankCode = '71272'; // Force sandbox bank code
+  const res = await fetch(`${base}/api/v1/account-provider/name-inquiry/${sandboxBankCode}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountNumber, sessionId }),
+  });
+
+  if (res.status === 401) {
+    tokenCache.value = null;
+    return nameInquiry({ base, token: await getBearerToken(), accountNumber, bankCode });
+  }
+
+  const data = await res.json();
+  if (!res.ok || !data.requestSuccessful) {
+    logger.error({ accountNumber: redact(accountNumber), status: res.status }, 'Monnify name inquiry failed');
+    throw new Error(data.responseMessage || 'Account verification failed');
+  }
+  return data;
+}
+
+
+export async function singleTransfer({ amount, reference, narration, destinationBankCode, destinationAccountNumber, destinationAccountName, sourceAccountNumber, currency = 'NGN' }) {
   logger.info(
     {
       reference,
       amount,
       account: redact(destinationAccountNumber),
     },
-    'Initiating transfer',
+    'Initiating real transfer via Monnify sandbox',
   );
 
-  // Always mock — Monnify disbursement is not activated for this merchant.
+  let token = await getBearerToken();
+  const base = process.env.MONNIFY_BASE_URL || 'https://sandbox.monnify.com';
+  const sourceAccount = sourceAccountNumber || process.env.MONNIFY_WALLET_ACCOUNT || '1992176477';
+
+  const payload = {
+    amount: amount / 100, // API expects amount in standard unit (Naira)
+    reference,
+    narration,
+    destinationBankCode,
+    destinationAccountNumber,
+    currency,
+    sourceAccountNumber: sourceAccount,
+    destinationAccountName,
+  };
+
+  let res = await fetch(`${base}/api/v2/disbursements/single`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (res.status === 401) {
+    tokenCache.value = null;
+    token = await getBearerToken();
+    res = await fetch(`${base}/api/v2/disbursements/single`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  }
+
+  const data = await res.json();
+  
+  if (!res.ok || !data.requestSuccessful) {
+    logger.error({ reference, status: res.status, body: data }, 'Monnify disbursement failed');
+    throw new Error(data.responseMessage || 'Transfer failed at provider');
+  }
+
   return {
-    transactionReference: `MFY-DEMO-${reference}`,
+    transactionReference: data.responseBody.transactionReference || `MFY-${reference}`,
     paymentReference: reference,
-    status: 'SUCCESS',
+    status: data.responseBody.status || 'SUCCESS',
     amount,
   };
 }

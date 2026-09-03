@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from '../state/AuthContext.jsx';
 import { api, speakText, formatNaira } from '../lib/api.js';
 import PinModal from '../components/PinModal.jsx';
 import BankDetailsModal from '../components/BankDetailsModal.jsx';
 import ConfirmTransferModal from '../components/ConfirmTransferModal.jsx';
 import SaveBeneficiaryModal from '../components/SaveBeneficiaryModal.jsx';
+import TransferOverlay from '../components/TransferOverlay.jsx';
 
 const SUGGESTIONS = [
   'How should I pay my rent this year? It\'s ₦900k due in November.',
@@ -31,8 +32,17 @@ export default function Home() {
   const [saveBeneOpen, setSaveBeneOpen] = useState(false);
   const [saveBeneBusy, setSaveBeneBusy] = useState(false);
   const [transferDetails, setTransferDetails] = useState(null);
+  const [overlay, setOverlay] = useState({ show: false, status: 'loading', message: '' });
+  const [reloading, setReloading] = useState(false);
   const feedRef = useRef(null);
   const recognitionRef = useRef(null);
+
+  async function handleReload() {
+    if (reloading) return;
+    setReloading(true);
+    await refreshAccount();
+    setTimeout(() => setReloading(false), 500);
+  }
 
   useEffect(() => {
     api.history(token).then((d) => setMessages(d.messages || []));
@@ -97,62 +107,84 @@ export default function Home() {
   async function confirmPending(pin) {
     if (!pending?.pending_action) return;
     const { type, payload } = pending.pending_action;
-    if (type === 'transfer') {
-      const result = await api.transfer(token, {
-        pin,
-        beneficiary_id: payload.beneficiary_id,
-        account_number: payload.account_number,
-        bank_code: payload.bank_code,
-        bank_name: payload.bank_name,
-        amount_kobo: payload.amount_kobo,
-      });
-      const spoken = result.spoken;
-      setMessages((m) => [
-        ...m,
-        result.message || {
-          id: `ok-${Date.now()}`,
-          role: 'zuri',
-          text: spoken,
-          intent: 'transfer_success',
-          created_at: new Date().toISOString(),
-        },
-      ]);
-      speakText(spoken, 'en', result.audioUrl);
-      await refreshAccount();
 
-      // If this was an ad-hoc transfer (no beneficiary_id), prompt to save
-      if (!payload.beneficiary_id && payload.account_number) {
-        setTransferDetails({
-          accountNumber: payload.account_number,
-          bankCode: payload.bank_code,
-          bankName: payload.bank_name,
-          accountName: result.account_name || `Account ${payload.account_number}`,
-          recipientRef: pending.pending_action.payload.recipient_ref || '',
-          amountKobo: payload.amount_kobo,
-        });
-        setPinOpen(false);
-        setPending(null);
-        setSaveBeneOpen(true);
-        return;
-      }
-    } else if (type === 'create_goal_mandate') {
-      const result = await api.createGoal(token, { ...payload, pin });
-      const spoken = result.spoken;
-      setMessages((m) => [
-        ...m,
-        result.message || {
-          id: `ok-${Date.now()}`,
-          role: 'zuri',
-          text: spoken,
-          intent: 'goal_created',
-          created_at: new Date().toISOString(),
-        },
-      ]);
-      speakText(spoken, 'en', result.audioUrl);
-    }
-    setPending(null);
     setPinOpen(false);
+    setOverlay({ show: true, status: 'loading', message: 'Processing…' });
+
+    try {
+      if (type === 'transfer') {
+        const result = await api.transfer(token, {
+          pin,
+          beneficiary_id: payload.beneficiary_id,
+          account_number: payload.account_number,
+          bank_code: payload.bank_code,
+          bank_name: payload.bank_name,
+          amount_kobo: payload.amount_kobo,
+        });
+        const spoken = result.spoken;
+        setMessages((m) => [
+          ...m,
+          result.message || {
+            id: `ok-${Date.now()}`,
+            role: 'zuri',
+            text: spoken,
+            intent: 'transfer_success',
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        speakText(spoken, 'en', result.audioUrl);
+        await refreshAccount();
+
+        setOverlay({ show: true, status: 'success', message: 'Transfer sent!' });
+
+        // If this was an ad-hoc transfer (no beneficiary_id), prompt to save
+        if (!payload.beneficiary_id && payload.account_number) {
+          setTransferDetails({
+            accountNumber: payload.account_number,
+            bankCode: payload.bank_code,
+            bankName: payload.bank_name,
+            accountName: result.account_name || `Account ${payload.account_number}`,
+            recipientRef: pending.pending_action.payload.recipient_ref || '',
+            amountKobo: payload.amount_kobo,
+          });
+          setPending(null);
+          // saveBeneOpen will be triggered when overlay dismisses
+          return;
+        }
+      } else if (type === 'create_goal_mandate') {
+        const result = await api.createGoal(token, { ...payload, pin });
+        const spoken = result.spoken;
+        setMessages((m) => [
+          ...m,
+          result.message || {
+            id: `ok-${Date.now()}`,
+            role: 'zuri',
+            text: spoken,
+            intent: 'goal_created',
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        speakText(spoken, 'en', result.audioUrl);
+        setOverlay({ show: true, status: 'success', message: 'Done!' });
+      }
+      setPending(null);
+    } catch (err) {
+      setOverlay({
+        show: true,
+        status: 'error',
+        message: err.message || 'Incorrect PIN',
+      });
+    }
   }
+
+  const handleOverlayDone = useCallback(() => {
+    const wasAdHocSuccess =
+      overlay.status === 'success' && transferDetails && !pending;
+    setOverlay({ show: false, status: 'loading', message: '' });
+    if (wasAdHocSuccess) {
+      setSaveBeneOpen(true);
+    }
+  }, [overlay.status, transferDetails, pending]);
 
   /** Step 2 of ad-hoc flow: BankDetailsModal → verify account → ConfirmTransferModal */
   async function handleBankDetailsNext(details) {
@@ -187,35 +219,46 @@ export default function Home() {
   /** Step 3 of ad-hoc flow: ConfirmTransferModal → execute transfer → SaveBeneficiaryModal */
   async function handleConfirmTransfer(pin) {
     if (!transferDetails) return;
-    const result = await api.transfer(token, {
-      pin,
-      account_number: transferDetails.accountNumber,
-      bank_code: transferDetails.bankCode,
-      bank_name: transferDetails.bankName,
-      amount_kobo: transferDetails.amountKobo,
-    });
-    const spoken = result.spoken;
-    setMessages((m) => [
-      ...m,
-      result.message || {
-        id: `ok-${Date.now()}`,
-        role: 'zuri',
-        text: spoken,
-        intent: 'transfer_success',
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    speakText(spoken, 'en', result.audioUrl);
-    await refreshAccount();
-
-    // Update accountName from server response if available
-    if (result.account_name) {
-      setTransferDetails((d) => ({ ...d, accountName: result.account_name }));
-    }
 
     setConfirmTransferOpen(false);
-    setPending(null);
-    setSaveBeneOpen(true);
+    setOverlay({ show: true, status: 'loading', message: 'Processing…' });
+
+    try {
+      const result = await api.transfer(token, {
+        pin,
+        account_number: transferDetails.accountNumber,
+        bank_code: transferDetails.bankCode,
+        bank_name: transferDetails.bankName,
+        amount_kobo: transferDetails.amountKobo,
+      });
+      const spoken = result.spoken;
+      setMessages((m) => [
+        ...m,
+        result.message || {
+          id: `ok-${Date.now()}`,
+          role: 'zuri',
+          text: spoken,
+          intent: 'transfer_success',
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      speakText(spoken, 'en', result.audioUrl);
+      await refreshAccount();
+
+      if (result.account_name) {
+        setTransferDetails((d) => ({ ...d, accountName: result.account_name }));
+      }
+
+      setPending(null);
+      setOverlay({ show: true, status: 'success', message: 'Transfer sent!' });
+      // saveBeneOpen triggered via handleOverlayDone
+    } catch (err) {
+      setOverlay({
+        show: true,
+        status: 'error',
+        message: err.message || 'Incorrect PIN',
+      });
+    }
   }
 
   /** Step 4: Save beneficiary or skip */
@@ -311,7 +354,29 @@ export default function Home() {
           >
             {YARNGPT_VOICES.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
-          <div className="balance-pill">{account?.balance_display || '—'}</div>
+          <div className="balance-pill" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>{account?.balance_display || '—'}</span>
+            <button 
+              onClick={handleReload}
+              disabled={reloading}
+              style={{
+                background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--text)'
+              }}
+              title="Reload Balance"
+              aria-label="Reload Balance"
+            >
+              <svg 
+                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" 
+                strokeLinecap="round" strokeLinejoin="round"
+                style={{ animation: reloading ? 'spinRing 1s linear infinite' : 'none' }}
+              >
+                <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -424,6 +489,15 @@ export default function Home() {
           busy={saveBeneBusy}
           onSave={handleSaveBeneficiary}
           onSkip={handleSkipSaveBene}
+        />
+      )}
+
+      {/* Transfer processing overlay */}
+      {overlay.show && (
+        <TransferOverlay
+          status={overlay.status}
+          message={overlay.message}
+          onDone={handleOverlayDone}
         />
       )}
     </>

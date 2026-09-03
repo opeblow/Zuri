@@ -131,6 +131,10 @@ export function getAccountForUser(userId) {
   return db.prepare('SELECT * FROM accounts WHERE user_id = ?').get(userId);
 }
 
+export function getAccountByReservedNumber(accountNumber) {
+  return db.prepare('SELECT * FROM accounts WHERE monnify_reserved_account = ?').get(accountNumber);
+}
+
 export function listBeneficiaries(userId) {
   return db.prepare('SELECT * FROM beneficiaries WHERE user_id = ?').all(userId);
 }

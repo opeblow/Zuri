@@ -35,6 +35,7 @@ export const api = {
   goals: (token) => request('/goals', { token }),
   beneficiaries: (token) => request('/beneficiaries', { token }),
   addBeneficiary: (token, body) => request('/beneficiaries', { token, method: 'POST', body }),
+  resolveBeneficiary: (token, body) => request('/beneficiaries/resolve', { token, method: 'POST', body }),
   banks: () => request('/beneficiaries/banks'),
   history: (token) => request('/conversation/history', { token }),
   talk: (token, text, voice) => request('/conversation/text', { token, method: 'POST', body: { text, voice } }),
