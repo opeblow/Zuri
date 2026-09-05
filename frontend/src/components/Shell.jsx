@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { NavLink, Outlet, Link } from 'react-router-dom';
 import { useAuth } from '../state/AuthContext.jsx';
-import { speakText } from '../lib/api.js';
+import { speakText, API } from '../lib/api.js';
 import '../styles/dashboard.css';
 
 const nav = [
@@ -25,7 +25,7 @@ export default function Shell() {
 
     (async () => {
       try {
-        const res = await fetch(`/api/events/stream?token=${encodeURIComponent(token)}`, {
+        const res = await fetch(`${API}/events/stream?token=${encodeURIComponent(token)}`, {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
         });

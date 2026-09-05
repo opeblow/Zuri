@@ -1,4 +1,4 @@
-const API = import.meta.env.VITE_API_URL || '/api';
+export const API = import.meta.env.VITE_API_URL || '/api';
 
 export class AuthError extends Error {
   constructor(message = 'Session expired. Please log in again.') {

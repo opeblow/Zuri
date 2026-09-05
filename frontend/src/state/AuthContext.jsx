@@ -1,6 +1,6 @@
 // Zuri — auth context: JWT session, account refresh, token persistence
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { api } from '../lib/api';
+import { api, API } from '../lib/api';
 
 const AuthContext = createContext(null);
 
@@ -33,7 +33,7 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     if (!token || token === 'null' || token === 'undefined') return;
 
-    const eventSource = new EventSource(`/api/events/stream?token=${token}`);
+    const eventSource = new EventSource(`${API}/events/stream?token=${token}`);
 
     eventSource.onmessage = (event) => {
       try {

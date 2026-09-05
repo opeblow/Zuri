@@ -11,5 +11,6 @@ services:
         value: 8000
       - key: JWT_SECRET
         generateValue: true
-      # Set these in the Render dashboard (never hardcode secrets):
-      # OPENAI_API_KEY, ALLOWED_ORIGINS
+      - key: ALLOWED_ORIGINS
+        value: "https://zuri-sooty.vercel.app"
+      # Set OPENAI_API_KEY and MONNIFY_* in the Render dashboard (secrets).
