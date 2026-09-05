@@ -1,0 +1,17 @@
+.env
+.env.*
+!*.example
+zuri.db
+zuri.db-*
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+.git/
+.gitignore
+render.yaml
+Procfile
+Dockerfile
+.dockerignore
+README.md
